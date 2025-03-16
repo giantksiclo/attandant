@@ -3,8 +3,9 @@ import { QrReader } from 'react-qr-reader';
 
 export interface QRCodeData {
   type: 'check_in' | 'check_out' | 'overtime_end';
-  timestamp: string;
+  timestamp?: string;
   location: string;
+  qr_id?: string;
 }
 
 interface QRScannerProps {
@@ -25,7 +26,6 @@ export const QRScanner: React.FC<QRScannerProps> = ({ onScan, onClose }) => {
         // 타입 체크
         if (!scannedData.type || 
             !['check_in', 'check_out', 'overtime_end'].includes(scannedData.type) ||
-            !scannedData.timestamp ||
             !scannedData.location) {
           setError('유효하지 않은 QR 코드입니다.');
           return;

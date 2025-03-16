@@ -62,6 +62,16 @@ export type AttendanceSettings = {
   updated_at: string;
 };
 
+// 공휴일 근무 시간 인터페이스
+export interface HolidayWork {
+  id?: string;
+  date: string;
+  work_minutes: number;
+  description: string;
+  created_by: string;
+  created_at: string;
+}
+
 // 프로필 가져오기 함수 - 개선된 로직
 export async function fetchProfile(userId: string) {
   console.log('프로필 조회 시작 - 사용자 ID:', userId);
@@ -435,3 +445,108 @@ export function isWithinWorkHours(timestamp: string, settingsArray: AttendanceSe
   // 근무 시작/종료 시간 확인
   return currentTime >= settings.work_start_time && currentTime <= settings.work_end_time;
 }
+
+// 공휴일 근무 시간 불러오기
+export const getHolidayWorks = async (): Promise<HolidayWork[]> => {
+  try {
+    const { data, error } = await supabase
+      .from('holiday_works')
+      .select('*')
+      .order('date', { ascending: false });
+    
+    if (error) {
+      console.error('공휴일 근무 시간 조회 오류:', error);
+      return [];
+    }
+    
+    return data || [];
+  } catch (error) {
+    console.error('공휴일 근무 시간 조회 중 예외 발생:', error);
+    return [];
+  }
+};
+
+// 공휴일 근무 시간 저장
+export const saveHolidayWork = async (holidayWork: HolidayWork): Promise<{ success: boolean; error?: any; data?: HolidayWork }> => {
+  try {
+    const { data, error } = await supabase
+      .from('holiday_works')
+      .insert(holidayWork)
+      .select();
+    
+    if (error) {
+      return { success: false, error };
+    }
+    
+    return { success: true, data: data[0] };
+  } catch (error) {
+    return { success: false, error };
+  }
+};
+
+// 공휴일 근무 시간 삭제
+export const deleteHolidayWork = async (id: string): Promise<{ success: boolean; error?: any }> => {
+  try {
+    const { error } = await supabase
+      .from('holiday_works')
+      .delete()
+      .eq('id', id);
+    
+    if (error) {
+      return { success: false, error };
+    }
+    
+    return { success: true };
+  } catch (error) {
+    return { success: false, error };
+  }
+};
+
+// 사용자별 공휴일 근무 시간 계산
+export const calculateUserHolidayWorkMinutes = async (userId: string): Promise<number> => {
+  try {
+    // 공휴일 데이터 불러오기
+    const holidayWorks = await getHolidayWorks();
+    
+    if (holidayWorks.length === 0) {
+      return 0;
+    }
+    
+    // 사용자 출근 기록 불러오기 (이번 달)
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    
+    const { data: records, error } = await supabase
+      .from('attendance_records')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('record_type', 'check_in')
+      .gte('timestamp', startOfMonth.toISOString())
+      .lte('timestamp', endOfMonth.toISOString());
+    
+    if (error || !records || records.length === 0) {
+      return 0;
+    }
+    
+    // 사용자의 출근 기록이 있는 날짜 추출
+    const userCheckInDates = records.map(record => {
+      const date = new Date(record.timestamp);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    });
+    
+    // 공휴일 중 사용자가 출근한 날짜에 대한 근무 시간 합산
+    let totalHolidayWorkMinutes = 0;
+    
+    holidayWorks.forEach(holiday => {
+      if (userCheckInDates.includes(holiday.date)) {
+        totalHolidayWorkMinutes += holiday.work_minutes;
+      }
+    });
+    
+    return totalHolidayWorkMinutes;
+  } catch (error) {
+    console.error('공휴일 근무 시간 계산 오류:', error);
+    return 0;
+  }
+};
