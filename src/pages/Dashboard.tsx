@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, updateProfile, updateUserMetadata, getWorkSettings, updateWorkSettings, type Profile, type AttendanceRecord, type AttendanceSettings } from '../lib/supabase';
+import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, updateProfile, updateUserMetadata, getWorkSettings, updateWorkSettings, getHolidayWorks, saveHolidayWork as saveHolidayWorkApi, deleteHolidayWork as deleteHolidayWorkApi, calculateUserHolidayWorkMinutes, type Profile, type AttendanceRecord, type AttendanceSettings, type HolidayWork } from '../lib/supabase';
 import { QRScanner } from '../components/QRScanner';
 import { QRCodeGenerator } from '../components/QRCodeGenerator';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
-import { validateQRData, getRecordTypeLabel, formatTimestamp, isWithinWorkHours } from '../lib/qrUtils';
+import { validateQRData, getRecordTypeLabel, formatTimestamp, isWithinWorkHours, 
+  checkLateStatus, checkEarlyLeaveStatus, calculateWorkHours, formatMinutesToHoursAndMinutes } from '../lib/qrUtils';
 
 export const Dashboard = () => {
   const navigate = useNavigate();
@@ -28,6 +29,13 @@ export const Dashboard = () => {
   const [tempWorkSettings, setTempWorkSettings] = useState<AttendanceSettings[]>([]);
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
   const [activeSettingTab, setActiveSettingTab] = useState<number>(1); // 기본값: 월요일(1)
+  const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
+  const [holidayWorks, setHolidayWorks] = useState<HolidayWork[]>([]);
+  const [selectedHolidayDate, setSelectedHolidayDate] = useState<string>('');
+  const [holidayWorkMinutes, setHolidayWorkMinutes] = useState<number>(0);
+  const [holidayWorkHours, setHolidayWorkHours] = useState<number>(0);
+  const [holidayDescription, setHolidayDescription] = useState<string>('');
+  const [isUpdatingHoliday, setIsUpdatingHoliday] = useState(false);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -118,6 +126,11 @@ export const Dashboard = () => {
         setWorkSettings(settings);
         console.log('근무시간 설정 로드됨:', settings);
         
+        // 공휴일 근무 시간 로드
+        if (session) {
+          await loadHolidayWorks();
+        }
+        
         console.log('세션 및 프로필 로드 완료');
       } catch (error) {
         console.error('세션/프로필 로드 오류:', error);
@@ -173,8 +186,11 @@ export const Dashboard = () => {
 
       console.log('QR 스캔 성공:', data);
       
+      // 현재 시간 설정 (QR 코드의 timestamp 대신 현재 시간 사용)
+      const currentTimestamp = new Date().toISOString();
+      
       // 현재 시간이 근무시간 외인지 확인
-      const isOutsideWorkHours = !isWithinWorkHours(new Date().toISOString(), workSettings);
+      const isOutsideWorkHours = !isWithinWorkHours(currentTimestamp, workSettings);
       
       // 현재 요일 가져오기
       const today = new Date();
@@ -205,12 +221,57 @@ export const Dashboard = () => {
           throw new Error('시간외 근무 기록이 취소되었습니다.');
         }
       }
+
+      // 시간외 근무 종료 QR을 찍고, 근무시간 외인 경우 자동으로 퇴근 기록도 추가
+      let additionalRecord = null;
+      if (recordType === 'overtime_end') {
+        // 이미 퇴근 기록이 있는지 확인
+        const hasCheckOut = todayRecords.some(record => record.record_type === 'check_out');
+        
+        // 현재 시간이 점심시간인지 확인
+        let isLunchTime = false;
+        if (todaySettings && todaySettings.lunch_start_time !== '00:00' && todaySettings.lunch_end_time !== '00:00') {
+          const currentDate = new Date();
+          const currentHours = currentDate.getHours();
+          const currentMinutes = currentDate.getMinutes();
+          const currentTimeStr = `${String(currentHours).padStart(2, '0')}:${String(currentMinutes).padStart(2, '0')}`;
+          
+          const lunchStartMinutes = todaySettings.lunch_start_time.split(':').reduce((acc, val, i) => acc + (i === 0 ? parseInt(val) * 60 : parseInt(val)), 0);
+          const lunchEndMinutes = todaySettings.lunch_end_time.split(':').reduce((acc, val, i) => acc + (i === 0 ? parseInt(val) * 60 : parseInt(val)), 0);
+          const currentTotalMinutes = currentTimeStr.split(':').reduce((acc, val, i) => acc + (i === 0 ? parseInt(val) * 60 : parseInt(val)), 0);
+          
+          isLunchTime = currentTotalMinutes >= lunchStartMinutes && currentTotalMinutes <= lunchEndMinutes;
+        }
+        
+        // 퇴근 기록이 없고, 현재 시간이 근무시간 외(점심시간은 제외)라면 퇴근 기록 추가
+        if (!hasCheckOut && (isOutsideWorkHours || !todaySettings?.is_working_day) && !isLunchTime) {
+          additionalRecord = {
+            user_id: profile.id,
+            record_type: 'check_out' as 'check_in' | 'check_out' | 'overtime_end',
+            location: data.location,
+            timestamp: currentTimestamp
+          };
+        }
+      }
       
       // 출결 기록 저장
       const result = await saveAttendance(profile.id, recordType, data.location);
       
       if (!result.success) {
         throw new Error(result.error?.message || '출결 기록 중 오류가 발생했습니다.');
+      }
+
+      // 추가 기록(자동 퇴근) 저장
+      if (additionalRecord) {
+        const additionalResult = await saveAttendance(
+          additionalRecord.user_id, 
+          additionalRecord.record_type, 
+          additionalRecord.location
+        );
+        
+        if (!additionalResult.success) {
+          console.warn('자동 퇴근 기록 저장 실패:', additionalResult.error);
+        }
       }
 
       // 기록 후 오늘의 기록 다시 로드
@@ -224,7 +285,15 @@ export const Dashboard = () => {
       // 성공 메시지
       const actionText = getRecordTypeLabel(recordType);
       const timeInfo = isOutsideWorkHours || !todaySettings?.is_working_day ? ' (시간외 근무)' : '';
-      alert(`${actionText} 기록이 완료되었습니다.${timeInfo}\n위치: ${data.location}\n시간: ${formatTimestamp(data.timestamp)}`);
+      const formattedTime = formatTimestamp(currentTimestamp);
+      let successMessage = `${actionText} 기록이 완료되었습니다.${timeInfo}\n위치: ${data.location}\n시간: ${formattedTime}`;
+      
+      // 자동 퇴근 기록이 추가된 경우 메시지에 추가
+      if (additionalRecord) {
+        successMessage += '\n\n또한 퇴근 기록도 자동으로 추가되었습니다.';
+      }
+      
+      alert(successMessage);
     } catch (error: any) {
       console.error('QR 출결 기록 오류:', error);
       setError(error.message || '출결 기록 중 오류가 발생했습니다.');
@@ -265,6 +334,236 @@ export const Dashboard = () => {
   const toggleMonthCalendar = () => {
     setShowMonthCalendar(!showMonthCalendar);
   };
+  
+  // 점심시간 없음 체크 여부 확인
+  const hasNoLunchTime = (setting: AttendanceSettings) => {
+    return setting.lunch_start_time === "00:00" && setting.lunch_end_time === "00:00";
+  };
+  
+  // 근무 시간 관련 정보 계산 함수
+  const getAttendanceStatus = (records: AttendanceRecord[]) => {
+    if (!workSettings || workSettings.length === 0) return null;
+    
+    const checkInRecord = records.find(r => r.record_type === 'check_in');
+    const checkOutRecord = records.find(r => r.record_type === 'check_out');
+    const overtimeEndRecord = records.find(r => r.record_type === 'overtime_end');
+    
+    if (!checkInRecord) return null;
+    
+    // 출근 날짜의 요일 확인
+    const checkInDate = new Date(checkInRecord.timestamp);
+    const dayOfWeek = checkInDate.getDay();
+    
+    // 해당 요일의 근무시간 설정 가져오기
+    const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek);
+    
+    if (!daySetting) return null;
+    
+    let result: any = {};
+    
+    // 비근무일(휴일) 체크
+    const isNonWorkingDay = !daySetting.is_working_day;
+    
+    // 지각 확인 (근무일인 경우에만)
+    if (daySetting.is_working_day) {
+      const lateStatus = checkLateStatus(checkInRecord.timestamp, daySetting.work_start_time);
+      if (lateStatus.isLate && lateStatus.minutesLate > 0) {
+        result.late = { 
+          isLate: true, 
+          minutesLate: lateStatus.minutesLate 
+        };
+      }
+    }
+    
+    // 퇴근 또는 시간외 근무 종료 기록이 있는 경우
+    const lastRecord = checkOutRecord || overtimeEndRecord;
+    
+    if (lastRecord) {
+      // 조퇴 확인 (근무일이고 시간외근무 종료가 아닌 경우에만)
+      if (daySetting.is_working_day && lastRecord.record_type === 'check_out') {
+        const earlyLeaveStatus = checkEarlyLeaveStatus(lastRecord.timestamp, daySetting.work_end_time);
+        if (earlyLeaveStatus.isEarlyLeave && earlyLeaveStatus.minutesEarly > 0) {
+          result.earlyLeave = { 
+            isEarlyLeave: true, 
+            minutesEarly: earlyLeaveStatus.minutesEarly 
+          };
+        }
+      }
+      
+      // 총 근무시간 계산
+      const workHours = calculateWorkHours(
+        checkInRecord, 
+        lastRecord, 
+        daySetting.lunch_start_time, 
+        daySetting.lunch_end_time
+      );
+      
+      result.workHours = workHours;
+      
+      // 시간외 근무 계산 - 시간외 근무 종료를 찍은 경우에만 계산
+      if (overtimeEndRecord) {
+        // 시간외 근무 종료 기록이 있는 경우에만 시간외 근무로 카운팅
+        if (isNonWorkingDay) {
+          // 비근무일(주말/휴일)인 경우 전체 시간을 시간외 근무로 계산
+          result.overtime = {
+            minutes: workHours.totalMinutes,
+            formatted: workHours.formattedTime
+          };
+        } else {
+          // 근무일인 경우, 정규 근무시간을 제외한 시간만 계산
+          const checkInTime = new Date(checkInRecord.timestamp);
+          const overtimeEndTime = new Date(overtimeEndRecord.timestamp);
+          
+          // 설정된 근무 시작/종료 시간
+          const today = new Date(checkInTime);
+          today.setHours(0, 0, 0, 0);
+          
+          // 근무 시작 시간 설정
+          const [workStartHour, workStartMinute] = daySetting.work_start_time.split(':').map(Number);
+          const workStartTime = new Date(today);
+          workStartTime.setHours(workStartHour, workStartMinute, 0, 0);
+          
+          // 근무 종료 시간 설정
+          const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
+          const workEndTime = new Date(today);
+          workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
+          
+          let overtimeMinutes = 0;
+          
+          // 시간외 근무 종료 기록이 있고, 정규 퇴근 시간 이후인 경우만 시간외 근무로 계산
+          if (overtimeEndTime > workEndTime) {
+            // 정규 퇴근 시간 이후부터 시간외 근무 종료 시간까지 계산
+            const lateMinutes = Math.floor((overtimeEndTime.getTime() - workEndTime.getTime()) / (1000 * 60));
+            overtimeMinutes += lateMinutes;
+          }
+          
+          // 점심시간 동안 시간외 근무 추가
+          if (!hasNoLunchTime(daySetting)) {
+            // 점심 시작 시간 설정
+            const [lunchStartHour, lunchStartMinute] = daySetting.lunch_start_time.split(':').map(Number);
+            const lunchStartTime = new Date(today);
+            lunchStartTime.setHours(lunchStartHour, lunchStartMinute, 0, 0);
+            
+            // 점심 종료 시간 설정
+            const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
+            const lunchEndTime = new Date(today);
+            lunchEndTime.setHours(lunchEndHour, lunchEndMinute, 0, 0);
+            
+            // 시간외 근무 종료 시간이 점심시간 내인지 확인
+            const isOvertimeEndDuringLunch = 
+              overtimeEndTime >= lunchStartTime && overtimeEndTime <= lunchEndTime;
+              
+            // 점심시간에 시간외 근무 종료를 찍은 경우
+            if (isOvertimeEndDuringLunch) {
+              // 점심 시작 시간부터 시간외 근무 종료 시간까지만 계산 (실제 근무한 시간)
+              const lunchWorkMinutes = Math.floor((overtimeEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60));
+              overtimeMinutes += lunchWorkMinutes;
+            }
+          }
+          
+          if (overtimeMinutes > 0) {
+            result.overtime = {
+              minutes: overtimeMinutes,
+              formatted: formatMinutesToHoursAndMinutes(overtimeMinutes)
+            };
+          }
+        }
+      }
+    }
+    
+    // 공휴일 근무 시간 추가
+    const checkInDateStr = `${checkInDate.getFullYear()}-${String(checkInDate.getMonth() + 1).padStart(2, '0')}-${String(checkInDate.getDate()).padStart(2, '0')}`;
+    const holidayWorkForThisDay = holidayWorks.find(h => h.date === checkInDateStr);
+    
+    if (holidayWorkForThisDay) {
+      result.holidayWork = {
+        minutes: holidayWorkForThisDay.work_minutes,
+        formatted: formatMinutesToHoursAndMinutes(holidayWorkForThisDay.work_minutes),
+        description: holidayWorkForThisDay.description
+      };
+    }
+    
+    return result;
+  };
+
+  // 월별 총 시간외 근무 시간 계산 함수
+  const calculateMonthlyOvertimeMinutes = () => {
+    if (!monthRecords || monthRecords.length === 0 || !workSettings || workSettings.length === 0) {
+      return 0;
+    }
+    
+    // 날짜별로 기록 그룹화
+    const recordsByDate = monthRecords.reduce((acc, record) => {
+      const date = new Date(record.timestamp);
+      const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
+      }
+      
+      acc[dateKey].push(record);
+      return acc;
+    }, {} as Record<string, AttendanceRecord[]>);
+    
+    // 각 날짜별 시간외 근무 계산 후 합산 - 시간외 근무 종료 찍은 날만 계산
+    let totalOvertimeMinutes = 0;
+    
+    Object.values(recordsByDate).forEach(dayRecords => {
+      // 해당 날짜에 시간외 근무 종료 기록이 있는 경우에만 계산
+      if (dayRecords.some(r => r.record_type === 'overtime_end')) {
+        const status = getAttendanceStatus(dayRecords);
+        if (status && status.overtime) {
+          totalOvertimeMinutes += status.overtime.minutes;
+        }
+      }
+    });
+    
+    return totalOvertimeMinutes;
+  };
+  
+  // 월별 총 지각 시간 계산 함수
+  const calculateMonthlyLateMinutes = () => {
+    if (!monthRecords || monthRecords.length === 0 || !workSettings || workSettings.length === 0) {
+      return 0;
+    }
+    
+    // 날짜별로 기록 그룹화
+    const recordsByDate = monthRecords.reduce((acc, record) => {
+      const date = new Date(record.timestamp);
+      const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
+      }
+      
+      acc[dateKey].push(record);
+      return acc;
+    }, {} as Record<string, AttendanceRecord[]>);
+    
+    // 각 날짜별 지각 시간 계산 후 합산
+    let totalLateMinutes = 0;
+    
+    Object.values(recordsByDate).forEach(dayRecords => {
+      const status = getAttendanceStatus(dayRecords);
+      if (status && status.late && status.late.isLate) {
+        totalLateMinutes += status.late.minutesLate;
+      }
+    });
+    
+    return totalLateMinutes;
+  };
+  
+  // 월별 총 시간외 근무 시간
+  const monthlyOvertimeMinutes = calculateMonthlyOvertimeMinutes();
+  const monthlyOvertimeFormatted = monthlyOvertimeMinutes > 0 
+    ? formatMinutesToHoursAndMinutes(monthlyOvertimeMinutes) 
+    : '';
+    
+  // 월별 총 지각 시간
+  const monthlyLateMinutes = calculateMonthlyLateMinutes();
+  const monthlyLateFormatted = monthlyLateMinutes > 0 
+    ? formatMinutesToHoursAndMinutes(monthlyLateMinutes) 
+    : '';
 
   // 프로필 업데이트 함수
   const handleUpdateProfile = async (role: 'admin' | 'staff' = 'admin') => {
@@ -446,11 +745,6 @@ export const Dashboard = () => {
     }));
   };
 
-  // 점심시간 없음 체크 여부 확인
-  const hasNoLunchTime = (setting: AttendanceSettings) => {
-    return setting.lunch_start_time === "00:00" && setting.lunch_end_time === "00:00";
-  };
-
   // 근무시간 설정 저장
   const saveWorkSettings = async () => {
     // 필수 입력 필드 검증
@@ -483,6 +777,170 @@ export const Dashboard = () => {
       setIsUpdatingSettings(false);
     }
   };
+
+  // 공휴일 근무 시간 로드 함수 - 기존 구현 대체
+  const loadHolidayWorks = async () => {
+    try {
+      const data = await getHolidayWorks();
+      setHolidayWorks(data);
+      console.log('공휴일 근무 시간 로드됨:', data.length, '개');
+    } catch (error) {
+      console.error('공휴일 근무 시간 로드 오류:', error);
+    }
+  };
+
+  // 공휴일 근무 시간 저장 함수 - 기존 구현 대체
+  const saveHolidayWork = async () => {
+    if (!selectedHolidayDate || holidayWorkHours <= 0 || !profile) {
+      setError('공휴일 정보를 모두 입력해주세요.');
+      return;
+    }
+    
+    try {
+      setIsUpdatingHoliday(true);
+      
+      // 시간을 분으로 변환
+      const minutes = holidayWorkHours * 60;
+      
+      const holidayData: HolidayWork = {
+        date: selectedHolidayDate,
+        work_minutes: minutes,
+        description: holidayDescription,
+        created_by: profile.id,
+        created_at: new Date().toISOString()
+      };
+      
+      const result = await saveHolidayWorkApi(holidayData);
+      
+      if (!result.success) {
+        throw new Error(result.error?.message || '저장 중 오류가 발생했습니다.');
+      }
+      
+      // 공휴일 목록 새로고침
+      await loadHolidayWorks();
+      
+      // 입력 필드 초기화
+      setSelectedHolidayDate('');
+      setHolidayWorkHours(0);
+      setHolidayWorkMinutes(0);
+      setHolidayDescription('');
+      setIsHolidayModalOpen(false);
+      
+      alert('공휴일 근무 시간이 저장되었습니다.');
+    } catch (error: any) {
+      console.error('공휴일 근무 시간 저장 오류:', error);
+      setError('공휴일 근무 시간 저장 중 오류가 발생했습니다: ' + error.message);
+    } finally {
+      setIsUpdatingHoliday(false);
+    }
+  };
+
+  // 공휴일 근무 시간 삭제 함수 - 기존 구현 대체
+  const deleteHolidayWork = async (id: string) => {
+    if (!window.confirm('이 공휴일 근무 시간을 삭제하시겠습니까?')) {
+      return;
+    }
+    
+    try {
+      const result = await deleteHolidayWorkApi(id);
+      
+      if (!result.success) {
+        throw new Error(result.error?.message || '삭제 중 오류가 발생했습니다.');
+      }
+      
+      // 공휴일 목록 새로고침
+      await loadHolidayWorks();
+      
+      alert('공휴일 근무 시간이 삭제되었습니다.');
+    } catch (error: any) {
+      console.error('공휴일 근무 시간 삭제 오류:', error);
+      setError('공휴일 근무 시간 삭제 중 오류가 발생했습니다: ' + error.message);
+    }
+  };
+
+  // 시간을 HH:MM 형식으로 포맷팅하는 함수 (기존 함수)
+  const formatMinutesToHoursMinutes = (minutes: number) => {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}시간 ${mins}분`;
+  };
+  
+  // 공휴일 근무 시간 표시 함수 (8시간 초과 시 별도 표시)
+  const formatHolidayWorkTime = (minutes: number) => {
+    const standardMinutes = 480; // 8시간 = 480분
+    
+    if (minutes <= standardMinutes) {
+      // 8시간 이하인 경우 일반 표시
+      return formatMinutesToHoursAndMinutes(minutes);
+    } else {
+      // 8시간 초과인 경우 '8시간 초과 X시간 X분' 형식으로 표시
+      const excessMinutes = minutes - standardMinutes;
+      const excessHours = Math.floor(excessMinutes / 60);
+      const excessMin = excessMinutes % 60;
+      
+      let formattedExcess = '';
+      if (excessHours > 0) {
+        formattedExcess += `${excessHours}시간`;
+      }
+      if (excessMin > 0) {
+        formattedExcess += ` ${excessMin}분`;
+      }
+      
+      return `8시간 초과 ${formattedExcess.trim()}`;
+    }
+  };
+  
+  // 분을 시간으로 변환하여 포맷팅하는 함수 (관리자용)
+  const formatMinutesToHours = (minutes: number) => {
+    const hours = minutes / 60;
+    return `${hours.toFixed(1)}시간`;
+  };
+
+  // 날짜 포맷 함수 (YYYY-MM-DD를 YYYY년 MM월 DD일로 변환)
+  const formatDateToKorean = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('ko-KR', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric',
+      weekday: 'long'
+    });
+  };
+
+  // 사용자별 공휴일 근무 시간 계산 (로컬 계산용)
+  const calculateUserHolidayWorkMinutesLocal = (userId: string) => {
+    if (!holidayWorks || holidayWorks.length === 0 || !monthRecords || monthRecords.length === 0) {
+      return 0;
+    }
+    
+    // 사용자의 출근 기록이 있는 날짜만 추출
+    const userCheckInDates = monthRecords
+      .filter(record => record.user_id === userId && record.record_type === 'check_in')
+      .map(record => {
+        const date = new Date(record.timestamp);
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      });
+    
+    // 공휴일 중 사용자가 출근한 날짜에 대한 근무 시간 합산
+    let totalHolidayWorkMinutes = 0;
+    
+    holidayWorks.forEach(holiday => {
+      if (userCheckInDates.includes(holiday.date)) {
+        totalHolidayWorkMinutes += holiday.work_minutes;
+      }
+    });
+    
+    return totalHolidayWorkMinutes;
+  };
+  
+  // 현재 사용자의 공휴일 근무 시간 계산
+  const currentUserHolidayWorkMinutes = profile ? calculateUserHolidayWorkMinutesLocal(profile.id) : 0;
+  const currentUserHolidayWorkFormatted = currentUserHolidayWorkMinutes > 0 
+    ? formatHolidayWorkTime(currentUserHolidayWorkMinutes) 
+    : '';
+  const currentUserHolidayWorkHours = currentUserHolidayWorkMinutes > 0
+    ? (currentUserHolidayWorkMinutes / 60).toFixed(1)
+    : '';
 
   if (loading) {
     return (
@@ -628,6 +1086,74 @@ export const Dashboard = () => {
           </div>
         )}
         
+        {/* 관리자용 공휴일 근무 시간 관리 */}
+        {profile?.role === 'admin' && (
+          <div className="bg-white shadow rounded-xl p-5 mb-5">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">공휴일 근무 시간 관리 (관리자용)</h2>
+            
+            {/* 공휴일 근무 시간 목록 */}
+            {holidayWorks.length > 0 ? (
+              <div className="mb-4 bg-gray-50 p-4 rounded-lg overflow-auto max-h-60">
+                <table className="w-full">
+                  <thead className="border-b">
+                    <tr>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500">날짜</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500">근무시간</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500">설명</th>
+                      <th className="p-2 text-right text-sm font-medium text-gray-500">관리</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {holidayWorks.map((holiday) => (
+                      <tr key={holiday.id} className="border-b border-gray-200 hover:bg-gray-100">
+                        <td className="p-2 text-sm text-gray-800 whitespace-nowrap">
+                          {formatDateToKorean(holiday.date)}
+                        </td>
+                        <td className="p-2 text-sm text-gray-800">
+                          {formatMinutesToHours(holiday.work_minutes)}
+                          {holiday.work_minutes > 480 && (
+                            <span className="block text-xs text-red-500 font-medium">
+                              8시간 초과 {formatMinutesToHours(holiday.work_minutes - 480)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2 text-sm text-gray-800">
+                          {holiday.description}
+                        </td>
+                        <td className="p-2 text-right">
+                          <button
+                            onClick={() => deleteHolidayWork(holiday.id!)}
+                            className="text-xs text-red-600 hover:text-red-800"
+                          >
+                            삭제
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="mb-4 bg-gray-50 p-4 rounded-lg text-center text-gray-500">
+                등록된 공휴일 근무 시간이 없습니다.
+              </div>
+            )}
+            
+            <button
+              onClick={() => {
+                setSelectedHolidayDate('');
+                setHolidayWorkHours(8); // 기본값 8시간으로 변경
+                setHolidayWorkMinutes(480); // 8시간 = 480분
+                setHolidayDescription('');
+                setIsHolidayModalOpen(true);
+              }}
+              className="w-full p-3 bg-indigo-100 text-indigo-800 rounded-xl font-medium"
+            >
+              공휴일 근무 시간 추가
+            </button>
+          </div>
+        )}
+        
         {/* 관리자용 근무시간 설정 */}
         {profile?.role === 'admin' && (
           <div className="bg-white shadow rounded-xl p-5 mb-5">
@@ -737,12 +1263,11 @@ export const Dashboard = () => {
             </p>
           ) : (
             <div className="space-y-3">
+              {/* 기록 목록 */}
               {todayRecords.map((record) => (
                 <div key={record.id} className="flex justify-between items-center p-3 border border-gray-100 rounded-lg">
                   <span className="font-medium text-gray-800">
-                    {record.record_type === 'check_in' && '출근'}
-                    {record.record_type === 'check_out' && '퇴근'}
-                    {record.record_type === 'overtime_end' && '시간외근무 종료'}
+                    {getRecordTypeLabel(record.record_type)}
                   </span>
                   <span className="text-gray-600 bg-gray-100 px-3 py-1 rounded-full text-sm">
                     {formatTime(record.timestamp)}
@@ -750,6 +1275,72 @@ export const Dashboard = () => {
                   </span>
                 </div>
               ))}
+              
+              {/* 근무 상태 요약 */}
+              {workSettings && workSettings.length > 0 && (
+                <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <h3 className="font-medium text-gray-800 mb-2">근무 상태</h3>
+                  
+                  {(() => {
+                    const status = getAttendanceStatus(todayRecords);
+                    if (!status) return <p className="text-sm text-gray-500">근무 상태를 계산할 수 없습니다.</p>;
+                    
+                    return (
+                      <div className="space-y-2">
+                        {/* 지각 표시 */}
+                        {status.late && status.late.isLate && (
+                          <div className="flex items-center text-sm">
+                            <div className="h-2 w-2 bg-amber-500 rounded-full mr-2"></div>
+                            <span className="text-amber-700 font-medium">
+                              {status.late.minutesLate}분 지각
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* 조퇴 표시 */}
+                        {status.earlyLeave && status.earlyLeave.isEarlyLeave && (
+                          <div className="flex items-center text-sm">
+                            <div className="h-2 w-2 bg-amber-500 rounded-full mr-2"></div>
+                            <span className="text-amber-700 font-medium">
+                              {status.earlyLeave.minutesEarly}분 조퇴
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* 시간외 근무 표시 */}
+                        {status.overtime && (
+                          <div className="flex items-center text-sm">
+                            <div className="h-2 w-2 bg-purple-500 rounded-full mr-2"></div>
+                            <span className="text-purple-700 font-medium">
+                              시간외 {status.overtime.formatted} 근무
+                            </span>
+                          </div>
+                        )}
+
+                        {/* 공휴일 근무 표시 - 직원에게는 분 단위로 표시 */}
+                        {status.holidayWork && (
+                          <div className="flex items-center text-sm">
+                            <div className="h-2 w-2 bg-red-500 rounded-full mr-2"></div>
+                            <span className="text-red-700 font-medium">
+                              공휴일({status.holidayWork.description}) {formatHolidayWorkTime(status.holidayWork.minutes)} 근무
+                            </span>
+                          </div>
+                        )}
+                        
+                        {/* 총 근무시간 표시 */}
+                        {status.workHours && (
+                          <div className="flex items-center text-sm">
+                            <div className="h-2 w-2 bg-blue-500 rounded-full mr-2"></div>
+                            <span className="text-blue-700 font-medium">
+                              총 {status.workHours.formattedTime} 근무
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -760,7 +1351,28 @@ export const Dashboard = () => {
             className="flex justify-between items-center mb-2 cursor-pointer" 
             onClick={toggleMonthCalendar}
           >
-            <h2 className="text-lg font-bold text-gray-900">이번달 기록</h2>
+            <div className="flex items-center">
+              <h2 className="text-lg font-bold text-gray-900">이번달 기록</h2>
+              <div className="flex ml-2">
+                {monthlyOvertimeMinutes > 0 && (
+                  <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-medium rounded-full mr-1">
+                    시간외 총 {monthlyOvertimeFormatted}
+                  </span>
+                )}
+                {monthlyLateMinutes > 0 && (
+                  <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-medium rounded-full mr-1">
+                    지각 총 {monthlyLateFormatted}
+                  </span>
+                )}
+                {currentUserHolidayWorkMinutes > 0 && (
+                  <span className="px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">
+                    공휴일 총 {currentUserHolidayWorkMinutes > 480 
+                      ? `8시간 초과 ${((currentUserHolidayWorkMinutes - 480) / 60).toFixed(1)}시간` 
+                      : `${currentUserHolidayWorkHours}시간`}
+                  </span>
+                )}
+              </div>
+            </div>
             <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
               {showMonthCalendar ? '접기' : '달력 보기'}
             </button>
@@ -768,7 +1380,7 @@ export const Dashboard = () => {
           
           {showMonthCalendar ? (
             <div className="mt-4">
-              <AttendanceCalendar records={monthRecords} />
+              <AttendanceCalendar records={monthRecords} workSettings={workSettings} />
             </div>
           ) : (
             <p className="text-sm text-gray-600 py-2">
@@ -980,6 +1592,97 @@ export const Dashboard = () => {
                 className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
               >
                 {isUpdatingSettings ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 공휴일 근무 시간 추가 모달 */}
+      {isHolidayModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">공휴일 근무 시간 추가</h3>
+              <button 
+                onClick={() => setIsHolidayModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  공휴일 날짜 선택
+                </label>
+                <input
+                  type="date"
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={selectedHolidayDate}
+                  onChange={(e) => setSelectedHolidayDate(e.target.value)}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  근무 시간 (시간)
+                </label>
+                <input
+                  type="number"
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={holidayWorkHours}
+                  onChange={(e) => {
+                    const hours = parseFloat(e.target.value) || 0;
+                    setHolidayWorkHours(hours);
+                    setHolidayWorkMinutes(hours * 60); // 내부적으로 분 단위도 저장
+                  }}
+                  onFocus={(e) => e.target.select()} // 포커스시 텍스트 자동 선택
+                  onClick={(e) => e.currentTarget.select()} // 클릭시 텍스트 자동 선택
+                  placeholder="예: 8 (8시간)"
+                  min="0"
+                  step="0.5" // 30분 단위 입력 가능
+                />
+                {holidayWorkHours > 0 && (
+                  <p className="mt-1 text-sm text-gray-500">
+                    {holidayWorkHours}시간 ({formatMinutesToHoursAndMinutes(holidayWorkHours * 60)})
+                    {holidayWorkHours > 8 && (
+                      <span className="block mt-1 text-red-500 font-medium">
+                        8시간 초과 {formatMinutesToHoursAndMinutes((holidayWorkHours * 60) - 480)}
+                      </span>
+                    )}
+                  </p>
+                )}
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  설명 (공휴일명)
+                </label>
+                <input
+                  type="text"
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={holidayDescription}
+                  onChange={(e) => setHolidayDescription(e.target.value)}
+                  placeholder="예: 설날, 추석, 어린이날 등"
+                />
+              </div>
+            </div>
+            
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setIsHolidayModalOpen(false)}
+                className="flex-1 py-3 border-2 border-gray-300 rounded-lg text-gray-700 font-medium"
+              >
+                취소
+              </button>
+              <button
+                onClick={saveHolidayWork}
+                disabled={isUpdatingHoliday || !selectedHolidayDate || holidayWorkHours <= 0}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                {isUpdatingHoliday ? '저장 중...' : '저장'}
               </button>
             </div>
           </div>
