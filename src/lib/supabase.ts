@@ -5,7 +5,7 @@ const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string;
 const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string;
 
 // 기본 데이터베이스 스키마 정의
-const PROFILES_TABLE = 'profiles';
+const PROFILES_TABLE = 'profiles_new';
 
 // Supabase 클라이언트 생성 - 디버깅 추가
 console.log('Supabase 초기화 - URL:', supabaseUrl);
@@ -38,7 +38,6 @@ export type Profile = {
   photo_url?: string | null;
   created_at: string;
   updated_at: string | null;
-  instance_id: number;
 };
 
 // 출결 기록 타입 정의
@@ -54,6 +53,8 @@ export type AttendanceRecord = {
 // 출결 설정 타입 정의
 export type AttendanceSettings = {
   id: number;
+  day_of_week: number; // 0: 일요일, 1: 월요일, ... 6: 토요일
+  is_working_day: boolean; // 근무일 여부
   work_start_time: string; // "09:00"
   work_end_time: string; // "18:00"
   lunch_start_time: string; // "12:00"
@@ -119,17 +120,19 @@ export async function createProfile(userId: string) {
     return null;
   }
   
-  // 기본 프로필 데이터 설정
+  // 메타데이터에서 이름 가져오기
   const userEmail = user.email || '';
-  const userName = userEmail.split('@')[0] || '사용자';
+  const userName = user.user_metadata?.name || userEmail.split('@')[0] || '사용자';
+  const userDepartment = user.user_metadata?.department || '미지정';
+  
+  // 기본 프로필 데이터 설정
   const defaultProfileData = {
     id: userId,
     name: userName,
-    department: '미지정',
-    role: 'admin' as const, // 첫 번째 사용자를 관리자로 기본 설정
+    department: userDepartment,
+    role: 'staff' as const, // admin에서 staff로 변경
     created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    instance_id: 1 // 기본값 0 대신 1로 설정
+    updated_at: new Date().toISOString()
   };
   
   console.log('생성할 프로필 데이터:', defaultProfileData);
@@ -138,8 +141,8 @@ export async function createProfile(userId: string) {
     // 1. Auth 사용자 메타데이터 업데이트
     const { success: metaSuccess } = await updateUserMetadata({
       name: userName,
-      department: '미지정',
-      role: 'admin'
+      department: userDepartment,
+      role: 'staff'
     });
     
     if (!metaSuccess) {
@@ -204,8 +207,7 @@ export async function updateProfile(profile: Partial<Profile> & { id: string }) 
     // 2. 프로필 데이터 업데이트
     const updateData = {
       ...profile,
-      updated_at: new Date().toISOString(),
-      instance_id: 1 // instance_id 값 설정
+      updated_at: new Date().toISOString()
     };
     
     const { data, error } = await supabase
@@ -330,4 +332,106 @@ export async function updateUserMetadata(userData: {
     console.error('사용자 메타데이터 업데이트 중 예외 발생:', error);
     return { success: false, error };
   }
+}
+
+// 근무 설정 가져오기 함수
+export async function getWorkSettings() {
+  console.log('근무시간 설정 조회 시작');
+  
+  try {
+    const { data, error } = await supabase
+      .from('attendance_settings')
+      .select('*')
+      .order('day_of_week', { ascending: true });
+    
+    if (error) {
+      console.error('근무시간 설정 조회 오류:', error);
+      // 기본 설정값 제공
+      return generateDefaultWorkSettings();
+    }
+    
+    if (!data || data.length === 0) {
+      console.log('근무시간 설정이 없어 기본값 사용');
+      return generateDefaultWorkSettings();
+    }
+    
+    console.log('근무시간 설정 조회 성공:', data);
+    return data as AttendanceSettings[];
+  } catch (error) {
+    console.error('근무시간 설정 조회 중 예외 발생:', error);
+    return generateDefaultWorkSettings();
+  }
+}
+
+// 기본 근무시간 설정 생성 함수
+function generateDefaultWorkSettings(): AttendanceSettings[] {
+  const now = new Date().toISOString();
+  return [
+    { id: 0, day_of_week: 0, is_working_day: false, work_start_time: '09:00', work_end_time: '18:00', lunch_start_time: '12:00', lunch_end_time: '13:00', updated_at: now },
+    { id: 1, day_of_week: 1, is_working_day: true, work_start_time: '09:00', work_end_time: '18:00', lunch_start_time: '12:00', lunch_end_time: '13:00', updated_at: now },
+    { id: 2, day_of_week: 2, is_working_day: true, work_start_time: '09:00', work_end_time: '18:00', lunch_start_time: '12:00', lunch_end_time: '13:00', updated_at: now },
+    { id: 3, day_of_week: 3, is_working_day: true, work_start_time: '09:00', work_end_time: '18:00', lunch_start_time: '12:00', lunch_end_time: '13:00', updated_at: now },
+    { id: 4, day_of_week: 4, is_working_day: true, work_start_time: '09:00', work_end_time: '18:00', lunch_start_time: '12:00', lunch_end_time: '13:00', updated_at: now },
+    { id: 5, day_of_week: 5, is_working_day: true, work_start_time: '09:00', work_end_time: '18:00', lunch_start_time: '12:00', lunch_end_time: '13:00', updated_at: now },
+    { id: 6, day_of_week: 6, is_working_day: false, work_start_time: '09:00', work_end_time: '18:00', lunch_start_time: '12:00', lunch_end_time: '13:00', updated_at: now },
+  ];
+}
+
+// 근무 설정 업데이트 함수
+export async function updateWorkSettings(settings: AttendanceSettings[]) {
+  console.log('근무시간 설정 업데이트 시작:', settings);
+  
+  try {
+    // 기존 데이터를 모두 삭제
+    await supabase
+      .from('attendance_settings')
+      .delete()
+      .neq('id', 0); // 모든 행 삭제 (안전을 위해 조건 추가)
+    
+    // 새 데이터 삽입
+    const { data, error } = await supabase
+      .from('attendance_settings')
+      .insert(settings.map(s => ({
+        day_of_week: s.day_of_week,
+        is_working_day: s.is_working_day,
+        work_start_time: s.work_start_time,
+        work_end_time: s.work_end_time,
+        lunch_start_time: s.lunch_start_time,
+        lunch_end_time: s.lunch_end_time,
+        updated_at: new Date().toISOString()
+      })))
+      .select();
+    
+    if (error) {
+      console.error('근무시간 설정 업데이트 오류:', error);
+      return { success: false, error };
+    }
+    
+    console.log('근무시간 설정 업데이트 성공:', data);
+    return { success: true, data };
+  } catch (error) {
+    console.error('근무시간 설정 업데이트 중 예외 발생:', error);
+    return { success: false, error };
+  }
+}
+
+// 시간이 근무시간 내인지 확인하는 함수
+export function isWithinWorkHours(timestamp: string, settingsArray: AttendanceSettings[]): boolean {
+  const date = new Date(timestamp);
+  const dayOfWeek = date.getDay(); // 0: 일요일, 1: 월요일, ... 6: 토요일
+  
+  // 해당 요일의 설정 찾기
+  const settings = settingsArray.find(s => s.day_of_week === dayOfWeek);
+  
+  if (!settings || !settings.is_working_day) {
+    // 해당 요일 설정이 없거나 근무일이 아님
+    return false;
+  }
+  
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  const currentTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+  
+  // 근무 시작/종료 시간 확인
+  return currentTime >= settings.work_start_time && currentTime <= settings.work_end_time;
 }

@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Login } from './pages/Login';
+import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
 import './index.css';
 // CSS는 HTML에서 직접 가져오므로 여기서는 import가 필요 없습니다.
@@ -50,6 +51,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
         <Route path="/dashboard" element={<Dashboard />} />
       </Routes>
     </BrowserRouter>

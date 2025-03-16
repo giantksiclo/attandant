@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, updateProfile, updateUserMetadata, type Profile, type AttendanceRecord } from '../lib/supabase';
+import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, updateProfile, updateUserMetadata, getWorkSettings, updateWorkSettings, type Profile, type AttendanceRecord, type AttendanceSettings } from '../lib/supabase';
 import { QRScanner } from '../components/QRScanner';
 import { QRCodeGenerator } from '../components/QRCodeGenerator';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
-import { validateQRData, getRecordTypeLabel, formatTimestamp } from '../lib/qrUtils';
+import { validateQRData, getRecordTypeLabel, formatTimestamp, isWithinWorkHours } from '../lib/qrUtils';
 
 export const Dashboard = () => {
   const navigate = useNavigate();
@@ -23,6 +23,11 @@ export const Dashboard = () => {
   const [showMonthCalendar, setShowMonthCalendar] = useState(false);
   const [userEmail, setUserEmail] = useState<string>('');
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [workSettings, setWorkSettings] = useState<AttendanceSettings[]>([]);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [tempWorkSettings, setTempWorkSettings] = useState<AttendanceSettings[]>([]);
+  const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
+  const [activeSettingTab, setActiveSettingTab] = useState<number>(1); // 기본값: 월요일(1)
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -108,6 +113,11 @@ export const Dashboard = () => {
         setMonthRecords(monthRecords);
         console.log('이번달 출결 기록 로드됨:', monthRecords.length, '개');
         
+        // 근무시간 설정 로드
+        const settings = await getWorkSettings();
+        setWorkSettings(settings);
+        console.log('근무시간 설정 로드됨:', settings);
+        
         console.log('세션 및 프로필 로드 완료');
       } catch (error) {
         console.error('세션/프로필 로드 오류:', error);
@@ -149,7 +159,7 @@ export const Dashboard = () => {
 
   // QR 스캔 처리 핸들러
   const handleQRScan = async (data: any) => {
-    if (!profile || !currentAction) return;
+    if (!profile || !currentAction || !workSettings || workSettings.length === 0) return;
     
     try {
       setActionLoading(true);
@@ -160,16 +170,44 @@ export const Dashboard = () => {
       if (!validateQRData(data)) {
         throw new Error('유효하지 않은 QR 코드입니다.');
       }
-      
-      // QR 코드 타입과 현재 액션 비교 (추가 보안 검증)
-      if (data.type !== currentAction) {
-        throw new Error(`${getRecordTypeLabel(currentAction)} QR 코드가 아닙니다.`);
-      }
 
       console.log('QR 스캔 성공:', data);
       
+      // 현재 시간이 근무시간 외인지 확인
+      const isOutsideWorkHours = !isWithinWorkHours(new Date().toISOString(), workSettings);
+      
+      // 현재 요일 가져오기
+      const today = new Date();
+      const dayOfWeek = today.getDay();
+      const todaySettings = workSettings.find(s => s.day_of_week === dayOfWeek);
+      
+      // 시간외 근무 처리 - 퇴근 기록이나 출근 기록이 근무시간 외인 경우
+      let recordType = currentAction;
+      
+      // 오늘이 근무일이 아니거나 근무시간 외인 경우
+      if (!todaySettings?.is_working_day || isOutsideWorkHours) {
+        // 사용자에게 시간외 근무로 처리됨을 알림
+        const dayName = ['일', '월', '화', '수', '목', '금', '토'][dayOfWeek];
+        const confirm = window.confirm(
+          `${dayName}요일 ${new Date().toLocaleTimeString()}은(는) ` +
+          (todaySettings?.is_working_day ? '근무시간 외' : '비근무일') + '입니다.\n' +
+          `시간외 근무로 기록하시겠습니까?`
+        );
+        
+        if (confirm) {
+          // 시간외 근무로 변경
+          if (currentAction === 'check_out') {
+            recordType = 'overtime_end';
+          }
+          // 출근은 그대로 출근으로 기록하되, 시간외임을 기록
+        } else {
+          // 취소 시 처리 중단
+          throw new Error('시간외 근무 기록이 취소되었습니다.');
+        }
+      }
+      
       // 출결 기록 저장
-      const result = await saveAttendance(profile.id, currentAction, data.location);
+      const result = await saveAttendance(profile.id, recordType, data.location);
       
       if (!result.success) {
         throw new Error(result.error?.message || '출결 기록 중 오류가 발생했습니다.');
@@ -184,8 +222,9 @@ export const Dashboard = () => {
       setMonthRecords(monthRecords);
 
       // 성공 메시지
-      const actionText = getRecordTypeLabel(currentAction);
-      alert(`${actionText} 기록이 완료되었습니다.\n위치: ${data.location}\n시간: ${formatTimestamp(data.timestamp)}`);
+      const actionText = getRecordTypeLabel(recordType);
+      const timeInfo = isOutsideWorkHours || !todaySettings?.is_working_day ? ' (시간외 근무)' : '';
+      alert(`${actionText} 기록이 완료되었습니다.${timeInfo}\n위치: ${data.location}\n시간: ${formatTimestamp(data.timestamp)}`);
     } catch (error: any) {
       console.error('QR 출결 기록 오류:', error);
       setError(error.message || '출결 기록 중 오류가 발생했습니다.');
@@ -289,10 +328,10 @@ export const Dashboard = () => {
       
       console.log('프로필 강제 생성 시작 - 사용자 ID:', session.user.id);
       
-      // 사용자 이름 설정
-      const userName = session.user.email?.split('@')[0] || '사용자';
-      const department = '미지정';
-      const role = 'admin';
+      // 사용자 메타데이터에서 이름 가져오기
+      const userName = session.user.user_metadata?.name || session.user.email?.split('@')[0] || '사용자';
+      const department = session.user.user_metadata?.department || '미지정';
+      const role = 'staff';
       
       // 1. Auth 사용자 메타데이터 업데이트
       const { success: metaSuccess } = await updateUserMetadata({
@@ -309,15 +348,14 @@ export const Dashboard = () => {
       
       // 2. 프로필 데이터 직접 생성
       const { error } = await supabase
-        .from('profiles')
+        .from('profiles_new')
         .insert({
           id: session.user.id,
           name: userName,
           department: department,
           role: role,
           created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          instance_id: 1 // 기본값 0 대신 1로 설정
+          updated_at: new Date().toISOString()
         });
       
       if (error) {
@@ -328,13 +366,12 @@ export const Dashboard = () => {
           
           // 업데이트로 시도
           const { error: updateError } = await supabase
-            .from('profiles')
+            .from('profiles_new')
             .update({
               name: userName,
               department: department,
               role: role,
-              updated_at: new Date().toISOString(),
-              instance_id: 1 // 기본값 0 대신 1로 설정
+              updated_at: new Date().toISOString()
             })
             .eq('id', session.user.id);
           
@@ -357,6 +394,93 @@ export const Dashboard = () => {
       setError(error.message || '프로필 강제 생성 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // 요일명 반환 함수
+  const getDayName = (dayOfWeek: number): string => {
+    const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+    return dayNames[dayOfWeek] || '알 수 없음';
+  };
+
+  // 근무시간 설정 열기
+  const openWorkSettings = () => {
+    if (workSettings.length > 0) {
+      setTempWorkSettings([...workSettings]);
+    }
+    setIsSettingsModalOpen(true);
+  };
+  
+  // 설정 탭 변경 함수
+  const changeSettingTab = (dayOfWeek: number) => {
+    setActiveSettingTab(dayOfWeek);
+  };
+
+  // 특정 요일 설정 업데이트
+  const updateDaySettings = (dayOfWeek: number, field: string, value: any) => {
+    setTempWorkSettings(prev => prev.map(setting => {
+      if (setting.day_of_week === dayOfWeek) {
+        // 점심시간 없음 관련 처리
+        if (field === 'no_lunch_time') {
+          if (value === true) {
+            // 점심시간 없음으로 설정 (토글 끄기)
+            return { 
+              ...setting, 
+              lunch_start_time: "00:00",
+              lunch_end_time: "00:00"
+            };
+          } else {
+            // 점심시간 있음으로 설정 (토글 켜기)
+            return { 
+              ...setting, 
+              lunch_start_time: "12:00",
+              lunch_end_time: "13:00"
+            };
+          }
+        }
+        
+        // 기타 필드 업데이트
+        return { ...setting, [field]: value };
+      }
+      return setting;
+    }));
+  };
+
+  // 점심시간 없음 체크 여부 확인
+  const hasNoLunchTime = (setting: AttendanceSettings) => {
+    return setting.lunch_start_time === "00:00" && setting.lunch_end_time === "00:00";
+  };
+
+  // 근무시간 설정 저장
+  const saveWorkSettings = async () => {
+    // 필수 입력 필드 검증
+    const invalidSettings = tempWorkSettings.find(s => 
+      s.is_working_day && (!s.work_start_time || !s.work_end_time || 
+        (!hasNoLunchTime(s) && (!s.lunch_start_time || !s.lunch_end_time)))
+    );
+    
+    if (invalidSettings) {
+      setError(`${getDayName(invalidSettings.day_of_week)}의 시간 설정을 모두 입력해주세요.`);
+      return;
+    }
+
+    try {
+      setIsUpdatingSettings(true);
+      
+      const result = await updateWorkSettings(tempWorkSettings);
+      
+      if (result.success) {
+        setWorkSettings(tempWorkSettings);
+        setIsSettingsModalOpen(false);
+        alert('근무시간 설정이 저장되었습니다.');
+      } else {
+        throw new Error('설정 저장 중 오류가 발생했습니다.');
+      }
+    } catch (error: any) {
+      console.error('근무시간 설정 저장 오류:', error);
+      setError(error.message || '근무시간 설정 저장 중 오류가 발생했습니다.');
+    } finally {
+      setIsUpdatingSettings(false);
     }
   };
 
@@ -424,20 +548,6 @@ export const Dashboard = () => {
         </div>
       </header>
 
-      {/* 디버깅 정보 (개발 환경에서만 표시) */}
-      <div className="bg-yellow-50 p-2 text-xs text-yellow-800 border-b border-yellow-200">
-        <div>프로필 데이터: {profile ? '있음' : '없음'}</div>
-        <div>이메일: {userEmail || '없음'}</div>
-        <div>역할: {profile?.role || '없음'}</div>
-        <div>ID: {profile?.id || '없음'}</div>
-        <button
-          onClick={handleForceCreateProfile}
-          className="mt-1 px-2 py-0.5 text-xs bg-red-200 text-red-800 rounded hover:bg-red-300"
-        >
-          프로필 강제 생성/업데이트
-        </button>
-      </div>
-
       {/* 계정 정보 섹션 */}
       <div className="bg-white shadow-sm px-4 py-3 mb-4">
         <div className="flex items-center justify-between">
@@ -463,19 +573,6 @@ export const Dashboard = () => {
                 }`}>
                   {profile?.role === 'admin' ? '관리자' : '직원'}
                 </span>
-                
-                {/* 프로필 업데이트 버튼 */}
-                <button
-                  onClick={() => handleUpdateProfile('admin')}
-                  disabled={isUpdatingProfile || profile?.role === 'admin'}
-                  className="ml-2 px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded-full hover:bg-green-200 disabled:opacity-50"
-                >
-                  {isUpdatingProfile 
-                    ? '처리 중...' 
-                    : profile?.role === 'admin' 
-                      ? '이미 관리자' 
-                      : '관리자로 설정'}
-                </button>
               </div>
               <p className="text-sm text-gray-600">
                 {profile?.department || '부서 정보 없음'} • 
@@ -492,23 +589,6 @@ export const Dashboard = () => {
                 weekday: 'long' 
               })}
             </p>
-            
-            {/* 프로필 강제 새로고침 버튼 */}
-            <div className="flex space-x-2">
-              <button
-                onClick={async () => {
-                  if (!profile) return;
-                  setLoading(true);
-                  const refreshedProfile = await fetchProfile(profile.id);
-                  setProfile(refreshedProfile);
-                  setLoading(false);
-                  alert('프로필 정보가 새로고침되었습니다.');
-                }}
-                className="text-xs text-blue-600 hover:underline"
-              >
-                프로필 새로고침
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -545,6 +625,56 @@ export const Dashboard = () => {
                 시간외근무 종료용 QR 코드 생성
               </button>
             </div>
+          </div>
+        )}
+        
+        {/* 관리자용 근무시간 설정 */}
+        {profile?.role === 'admin' && (
+          <div className="bg-white shadow rounded-xl p-5 mb-5">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">근무시간 설정 (관리자용)</h2>
+            
+            {workSettings && workSettings.length > 0 && (
+              <div className="mb-4 bg-gray-50 p-4 rounded-lg">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {workSettings.map((setting) => (
+                    <div key={setting.day_of_week} className={`p-3 rounded-lg ${
+                      setting.is_working_day ? 'bg-blue-50 border border-blue-100' : 'bg-gray-100 border border-gray-200'
+                    }`}>
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="font-medium text-gray-800">{getDayName(setting.day_of_week).replace('요일', '')}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          setting.is_working_day ? 'bg-blue-100 text-blue-800' : 'bg-gray-300 text-gray-700'
+                        }`}>
+                          {setting.is_working_day ? '근무일' : '휴무일'}
+                        </span>
+                      </div>
+                      
+                      {setting.is_working_day && (
+                        <div className="text-xs text-gray-600">
+                          <p>근무: {setting.work_start_time} ~ {setting.work_end_time}</p>
+                          {!hasNoLunchTime(setting) ? (
+                            <p>점심: {setting.lunch_start_time} ~ {setting.lunch_end_time}</p>
+                          ) : (
+                            <p>점심시간 없음</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                
+                <p className="text-xs text-gray-500 mt-3">
+                  * 근무일이 아니거나 근무시간 외의 출퇴근은 자동으로 시간외근무로 기록됩니다.
+                </p>
+              </div>
+            )}
+            
+            <button
+              onClick={openWorkSettings}
+              className="w-full p-3 bg-indigo-100 text-indigo-800 rounded-xl font-medium"
+            >
+              근무시간 설정 변경
+            </button>
           </div>
         )}
 
@@ -686,6 +816,172 @@ export const Dashboard = () => {
             >
               닫기
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 근무시간 설정 모달 */}
+      {isSettingsModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">근무시간 설정</h3>
+              <button 
+                onClick={() => setIsSettingsModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            
+            {/* 요일 탭 */}
+            <div className="flex overflow-x-auto mb-4 pb-1 border-b">
+              {tempWorkSettings.map((setting) => (
+                <button
+                  key={setting.day_of_week}
+                  onClick={() => changeSettingTab(setting.day_of_week)}
+                  className={`px-3 py-2 mr-1 rounded-t-lg whitespace-nowrap ${
+                    activeSettingTab === setting.day_of_week 
+                      ? 'bg-blue-100 text-blue-800 font-medium' 
+                      : 'text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  {getDayName(setting.day_of_week).replace('요일', '')}
+                </button>
+              ))}
+            </div>
+            
+            {/* 선택한 요일 설정 */}
+            {tempWorkSettings.map((setting) => (
+              <div 
+                key={setting.day_of_week} 
+                className={activeSettingTab === setting.day_of_week ? 'block' : 'hidden'}
+              >
+                <div className="mb-4">
+                  {/* 근무일/휴무일 토글 스위치 */}
+                  <div 
+                    className="mb-4 p-4 bg-white rounded-lg border-2 border-gray-200 shadow-sm"
+                    onClick={() => updateDaySettings(setting.day_of_week, 'is_working_day', !setting.is_working_day)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="block text-lg font-bold text-gray-800">
+                          {setting.is_working_day ? '근무일' : '휴무일'}
+                        </span>
+                        <span className="text-sm text-gray-500">
+                          {setting.is_working_day 
+                            ? '근무 시간과 점심 시간을 설정할 수 있습니다' 
+                            : '휴무일로 설정되며, 모든 출결은 시간외 근무로 기록됩니다'}
+                        </span>
+                      </div>
+                      <div className={`relative inline-block w-14 h-8 transition-colors duration-200 ease-in-out rounded-full ${
+                        setting.is_working_day ? 'bg-blue-600' : 'bg-gray-300'
+                      }`}>
+                        <span className={`absolute left-1 top-1 w-6 h-6 transition-transform duration-200 ease-in-out transform ${
+                          setting.is_working_day ? 'translate-x-6 bg-white' : 'translate-x-0 bg-white'
+                        } rounded-full shadow-md`}></span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {setting.is_working_day && (
+                    <div className="space-y-5 animate-fade-in p-4 bg-white rounded-lg border-2 border-blue-200 shadow-sm">
+                      <h4 className="text-lg font-bold text-blue-800">근무 시간 설정</h4>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          근무 시작 시간
+                        </label>
+                        <input
+                          type="time"
+                          className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={setting.work_start_time || ''}
+                          onChange={(e) => updateDaySettings(setting.day_of_week, 'work_start_time', e.target.value)}
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          근무 종료 시간
+                        </label>
+                        <input
+                          type="time"
+                          className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={setting.work_end_time || ''}
+                          onChange={(e) => updateDaySettings(setting.day_of_week, 'work_end_time', e.target.value)}
+                        />
+                      </div>
+                      
+                      <div className="pt-5 mt-2 border-t-2 border-gray-100">
+                        <div className="flex items-center justify-between mb-4"
+                          onClick={() => updateDaySettings(setting.day_of_week, 'no_lunch_time', !hasNoLunchTime(setting))}
+                        >
+                          <div>
+                            <h4 className="text-lg font-bold text-blue-800">점심 시간 설정</h4>
+                            <span className="text-sm text-gray-500">
+                              {hasNoLunchTime(setting) 
+                                ? '점심 시간 없이 근무합니다' 
+                                : '점심 시간을 설정합니다'}
+                            </span>
+                          </div>
+                          <div className={`relative inline-block w-14 h-8 transition-colors duration-200 ease-in-out rounded-full cursor-pointer ${
+                            !hasNoLunchTime(setting) ? 'bg-blue-600' : 'bg-gray-300'
+                          }`}>
+                            <span className={`absolute left-1 top-1 w-6 h-6 transition-transform duration-200 ease-in-out transform ${
+                              !hasNoLunchTime(setting) ? 'translate-x-6 bg-white' : 'translate-x-0 bg-white'
+                            } rounded-full shadow-md`}></span>
+                          </div>
+                        </div>
+                        
+                        {!hasNoLunchTime(setting) && (
+                          <div className="space-y-4 animate-fade-in pl-2 border-l-4 border-blue-200">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                                점심 시작 시간
+                              </label>
+                              <input
+                                type="time"
+                                className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                value={setting.lunch_start_time || ''}
+                                onChange={(e) => updateDaySettings(setting.day_of_week, 'lunch_start_time', e.target.value)}
+                              />
+                            </div>
+                            
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                                점심 종료 시간
+                              </label>
+                              <input
+                                type="time"
+                                className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                value={setting.lunch_end_time || ''}
+                                onChange={(e) => updateDaySettings(setting.day_of_week, 'lunch_end_time', e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setIsSettingsModalOpen(false)}
+                className="flex-1 py-3 border-2 border-gray-300 rounded-lg text-gray-700 font-medium"
+              >
+                취소
+              </button>
+              <button
+                onClick={saveWorkSettings}
+                disabled={isUpdatingSettings}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                {isUpdatingSettings ? '저장 중...' : '저장'}
+              </button>
+            </div>
           </div>
         </div>
       )}

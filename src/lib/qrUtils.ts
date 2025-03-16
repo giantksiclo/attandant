@@ -56,4 +56,37 @@ export const formatTimestamp = (timestamp: string): string => {
   } catch {
     return timestamp;
   }
-}; 
+};
+
+// AttendanceSettings 타입 추가
+type AttendanceSettings = {
+  id: number;
+  day_of_week: number; // 0: 일요일, 1: 월요일, ... 6: 토요일
+  is_working_day: boolean; // 근무일 여부
+  work_start_time: string; // "09:00"
+  work_end_time: string; // "18:00"
+  lunch_start_time: string; // "12:00"
+  lunch_end_time: string; // "13:00"
+  updated_at: string;
+};
+
+// 시간이 근무시간 내인지 확인하는 함수
+export function isWithinWorkHours(timestamp: string, settingsArray: AttendanceSettings[]): boolean {
+  const date = new Date(timestamp);
+  const dayOfWeek = date.getDay(); // 0: 일요일, 1: 월요일, ... 6: 토요일
+  
+  // 해당 요일의 설정 찾기
+  const settings = settingsArray.find(s => s.day_of_week === dayOfWeek);
+  
+  if (!settings || !settings.is_working_day) {
+    // 해당 요일 설정이 없거나 근무일이 아님
+    return false;
+  }
+  
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  const currentTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+  
+  // 근무 시작/종료 시간 확인
+  return currentTime >= settings.work_start_time && currentTime <= settings.work_end_time;
+} 

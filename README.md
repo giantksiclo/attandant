@@ -62,3 +62,13 @@ npm run preview
 - Supabase (인증 및 데이터베이스)
 - Tailwind CSS
 - PWA (Progressive Web App)
+
+## 배포 정보
+
+이 프로젝트는 Vercel을 통해 배포됩니다. 배포 시 `react-qr-reader` 라이브러리와 React 18 사이의 의존성 충돌을 해결하기 위해 다음과 같은 설정이 적용되었습니다:
+
+1. `package.json`의 build 스크립트에 `--legacy-peer-deps` 옵션 추가
+2. 프로젝트 루트에 `.npmrc` 파일 추가 (`legacy-peer-deps=true` 설정)
+3. Vercel 대시보드에서 Install Command를 `npm install --legacy-peer-deps`로 수정
+
+> **중요**: Vercel 대시보드에서 Build Command가 올바르게 설정되어 있는지 확인하세요. 잘못된 문법(예: 끝에 쉼표가 있는 경우)이 포함되어 있으면 배포가 실패할 수 있습니다. 올바른 설정은 `npm run build` 또는 `npm install --legacy-peer-deps && vite build` 입니다.
