@@ -863,13 +863,13 @@ export const Dashboard = () => {
   };
 
   // 날짜 포맷 함수 (YYYY-MM-DD를 YYYY년 MM월 DD일로 변환)
-  const formatDateToKorean = (dateString: string) => {
+  const formatDateToKorean = (dateString: string, includeWeekday: boolean = false) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('ko-KR', { 
       year: 'numeric', 
       month: 'long', 
       day: 'numeric',
-      weekday: 'long'
+      weekday: includeWeekday ? 'long' : undefined
     });
   };
 
@@ -1151,45 +1151,47 @@ export const Dashboard = () => {
             
             {/* 공휴일 근무 시간 목록 */}
             {holidayWorks.length > 0 ? (
-              <div className="mb-4 bg-gray-50 p-4 rounded-lg overflow-auto max-h-60">
-                <table className="w-full">
-                  <thead className="border-b">
-                    <tr>
-                      <th className="p-2 text-left text-sm font-medium text-gray-500">날짜</th>
-                      <th className="p-2 text-left text-sm font-medium text-gray-500">근무시간</th>
-                      <th className="p-2 text-left text-sm font-medium text-gray-500">설명</th>
-                      <th className="p-2 text-right text-sm font-medium text-gray-500">관리</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {holidayWorks.map((holiday) => (
-                      <tr key={holiday.id} className="border-b border-gray-200 hover:bg-gray-100">
-                        <td className="p-2 text-sm text-gray-800 whitespace-nowrap">
-                          {formatDateToKorean(holiday.date)}
-                        </td>
-                        <td className="p-2 text-sm text-gray-800">
-                          {formatMinutesToHours(holiday.work_minutes)}
-                          {holiday.work_minutes > 480 && (
-                            <span className="block text-xs text-red-500 font-medium">
-                              8시간 초과 {formatMinutesToHours(holiday.work_minutes - 480)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-2 text-sm text-gray-800">
-                          {holiday.description}
-                        </td>
-                        <td className="p-2 text-right">
-                          <button
-                            onClick={() => deleteHolidayWork(holiday.id!)}
-                            className="text-xs text-red-600 hover:text-red-800"
-                          >
-                            삭제
-                          </button>
-                        </td>
+              <div className="mb-4 bg-gray-50 p-2 sm:p-4 rounded-lg overflow-hidden">
+                <div className="table-container">
+                  <table className="w-full" style={{minWidth: "550px"}}>
+                    <thead className="border-b">
+                      <tr>
+                        <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "35%"}}>날짜</th>
+                        <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "25%"}}>근무시간</th>
+                        <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "30%"}}>설명</th>
+                        <th className="p-2 text-right text-sm font-medium text-gray-500" style={{width: "10%"}}>관리</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {holidayWorks.map((holiday) => (
+                        <tr key={holiday.id} className="border-b border-gray-200 hover:bg-gray-100">
+                          <td className="p-2 text-sm text-gray-800">
+                            {formatDateToKorean(holiday.date)}
+                          </td>
+                          <td className="p-2 text-sm text-gray-800">
+                            <div>{formatMinutesToHours(holiday.work_minutes)}</div>
+                            {holiday.work_minutes > 480 && (
+                              <div className="text-xs text-red-500 font-medium mt-1">
+                                8시간 초과: {formatMinutesToHours(holiday.work_minutes - 480)}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-2 text-sm text-gray-800">
+                            {holiday.description}
+                          </td>
+                          <td className="p-2 text-right">
+                            <button
+                              onClick={() => deleteHolidayWork(holiday.id!)}
+                              className="text-xs text-red-600 hover:text-red-800"
+                            >
+                              삭제
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             ) : (
               <div className="mb-4 bg-gray-50 p-4 rounded-lg text-center text-gray-500">
@@ -1217,8 +1219,8 @@ export const Dashboard = () => {
             <h2 className="text-lg font-bold text-gray-900 mb-4">근무시간 설정 (관리자용)</h2>
             
             {workSettings && workSettings.length > 0 && (
-              <div className="mb-4 bg-gray-50 p-4 rounded-lg">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="mb-4 bg-gray-50 p-4 rounded-lg overflow-x-auto">
+                <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-4 gap-4 min-w-[300px]">
                   {workSettings.map((setting) => (
                     <div key={setting.day_of_week} className={`p-3 rounded-lg ${
                       setting.is_working_day ? 'bg-blue-50 border border-blue-100' : 'bg-gray-100 border border-gray-200'
@@ -1543,20 +1545,22 @@ export const Dashboard = () => {
             </div>
             
             {/* 요일 탭 */}
-            <div className="flex overflow-x-auto mb-4 pb-1 border-b">
-              {tempWorkSettings.map((setting) => (
-                <button
-                  key={setting.day_of_week}
-                  onClick={() => changeSettingTab(setting.day_of_week)}
-                  className={`px-3 py-2 mr-1 rounded-t-lg whitespace-nowrap ${
-                    activeSettingTab === setting.day_of_week 
-                      ? 'bg-blue-100 text-blue-800 font-medium' 
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  {getDayName(setting.day_of_week).replace('요일', '')}
-                </button>
-              ))}
+            <div className="table-container">
+              <div className="flex mb-4 pb-1 border-b min-w-[500px]">
+                {tempWorkSettings.map((setting) => (
+                  <button
+                    key={setting.day_of_week}
+                    onClick={() => changeSettingTab(setting.day_of_week)}
+                    className={`px-3 py-2 mr-1 rounded-t-lg ${
+                      activeSettingTab === setting.day_of_week 
+                        ? 'bg-blue-100 text-blue-800 font-medium' 
+                        : 'text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >
+                    {getDayName(setting.day_of_week).replace('요일', '')}
+                  </button>
+                ))}
+              </div>
             </div>
             
             {/* 선택한 요일 설정 */}

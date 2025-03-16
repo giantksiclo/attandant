@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase, fetchProfile, getMonthAttendance, getHolidayWorks, getWorkSettings, type Profile, type AttendanceRecord, type HolidayWork, type AttendanceSettings } from '../lib/supabase';
-import { formatMinutesToHoursAndMinutes, checkLateStatus, checkEarlyLeaveStatus, calculateWorkHours } from '../lib/qrUtils';
+import { formatMinutesToHoursAndMinutes, calculateWorkHours } from '../lib/qrUtils';
 
 interface EmployeeStats {
   id: string;
@@ -21,7 +21,7 @@ type SortDirection = 'asc' | 'desc';
 
 export const EmployeeReport = () => {
   const navigate = useNavigate();
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [userProfile, setUserProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Profile[]>([]);
@@ -59,7 +59,7 @@ export const EmployeeReport = () => {
           return;
         }
         
-        setProfile(profile);
+        setUserProfile(profile);
         
         // 관리자 확인
         if (profile.role !== 'admin') {
@@ -379,6 +379,11 @@ export const EmployeeReport = () => {
             </button>
             <h1 className="text-lg font-bold text-gray-900">전체 직원 근무 일지</h1>
           </div>
+          {userProfile && (
+            <div className="text-sm text-gray-700">
+              관리자: {userProfile.name}
+            </div>
+          )}
         </div>
       </header>
 
@@ -399,70 +404,72 @@ export const EmployeeReport = () => {
             </p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full table-auto">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th 
-                      className="px-4 py-2 text-left text-sm font-medium text-gray-500 border-b cursor-pointer"
-                      onClick={() => handleSort('name')}
-                    >
-                      이름 {renderSortIndicator('name')}
-                    </th>
-                    <th 
-                      className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer"
-                      onClick={() => handleSort('totalWorkMinutes')}
-                    >
-                      총 근무시간 {renderSortIndicator('totalWorkMinutes')}
-                    </th>
-                    <th 
-                      className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer"
-                      onClick={() => handleSort('overtimeMinutes')}
-                    >
-                      시간외 근무 총시간 {renderSortIndicator('overtimeMinutes')}
-                    </th>
-                    <th 
-                      className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer"
-                      onClick={() => handleSort('holidayWorkMinutes')}
-                    >
-                      휴일 근무 총시간 {renderSortIndicator('holidayWorkMinutes')}
-                    </th>
-                    <th 
-                      className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer"
-                      onClick={() => handleSort('holidayExceededMinutes')}
-                    >
-                      휴일 8시간 초과 근무시간 {renderSortIndicator('holidayExceededMinutes')}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedEmployeeStats.map((stat) => (
-                    <tr key={stat.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-sm font-medium text-gray-900 border-b">{stat.name}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700 text-right border-b">{stat.totalWorkFormatted}</td>
-                      <td className="px-4 py-3 text-sm text-purple-700 text-right border-b">{stat.overtimeFormatted}</td>
-                      <td className="px-4 py-3 text-sm text-red-700 text-right border-b">{stat.holidayWorkFormatted}</td>
-                      <td className="px-4 py-3 text-sm text-red-700 font-medium text-right border-b">{stat.holidayExceededFormatted}</td>
+              <div className="table-container">
+                <table className="w-full table-auto">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th 
+                        className="px-4 py-2 text-left text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        onClick={() => handleSort('name')}
+                      >
+                        이름 {renderSortIndicator('name')}
+                      </th>
+                      <th 
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        onClick={() => handleSort('totalWorkMinutes')}
+                      >
+                        총 근무시간 {renderSortIndicator('totalWorkMinutes')}
+                      </th>
+                      <th 
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        onClick={() => handleSort('overtimeMinutes')}
+                      >
+                        시간외 근무 {renderSortIndicator('overtimeMinutes')}
+                      </th>
+                      <th 
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        onClick={() => handleSort('holidayWorkMinutes')}
+                      >
+                        휴일 근무 {renderSortIndicator('holidayWorkMinutes')}
+                      </th>
+                      <th 
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        onClick={() => handleSort('holidayExceededMinutes')}
+                      >
+                        휴일 8시간 초과 {renderSortIndicator('holidayExceededMinutes')}
+                      </th>
                     </tr>
-                  ))}
-                  
-                  {/* 합계 행 추가 */}
-                  <tr className="bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-bold text-gray-900">전체 합계</td>
-                    <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
-                      {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.totalWorkMinutes, 0))}
-                    </td>
-                    <td className="px-4 py-3 text-sm font-bold text-purple-700 text-right">
-                      {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.overtimeMinutes, 0))}
-                    </td>
-                    <td className="px-4 py-3 text-sm font-bold text-red-700 text-right">
-                      {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.holidayWorkMinutes, 0))}
-                    </td>
-                    <td className="px-4 py-3 text-sm font-bold text-red-700 text-right">
-                      {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.holidayExceededMinutes, 0))}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {sortedEmployeeStats.map((stat) => (
+                      <tr key={stat.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-sm font-medium text-gray-900 border-b">{stat.name}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700 text-right border-b">{stat.totalWorkFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-purple-700 text-right border-b">{stat.overtimeFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-red-700 text-right border-b">{stat.holidayWorkFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-red-700 font-medium text-right border-b">{stat.holidayExceededFormatted}</td>
+                      </tr>
+                    ))}
+                    
+                    {/* 합계 행 추가 */}
+                    <tr className="bg-gray-50">
+                      <td className="px-4 py-3 text-sm font-bold text-gray-900">전체 합계</td>
+                      <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
+                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.totalWorkMinutes, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-sm font-bold text-purple-700 text-right">
+                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.overtimeMinutes, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-sm font-bold text-red-700 text-right">
+                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.holidayWorkMinutes, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-sm font-bold text-red-700 text-right">
+                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.holidayExceededMinutes, 0))}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

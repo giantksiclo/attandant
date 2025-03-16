@@ -106,4 +106,56 @@ button:active {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+/* 테이블 관련 스타일 - 모바일 환경에서 세로 배열 문제 해결 */
+.table-container {
+  overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+th, td {
+  white-space: normal;
+  text-align: left;
+  vertical-align: middle;
+  word-break: keep-all;
+  padding: 8px 4px;
+  min-width: 60px;
+  overflow-wrap: break-word;
+}
+
+td div {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+/* 모바일 환경에서 테이블 스타일 조정 */
+@media (max-width: 768px) {
+  table {
+    min-width: 500px; /* 기본 테이블 최소 너비 설정 */
+  }
+  
+  th, td {
+    display: table-cell !important; /* 강제로 테이블 셀 표시 방식 적용 */
+  }
+}
+
+/* 테이블 안의 특정 열 너비 조정 */
+.table-sm-col {
+  width: 60px;
+}
+
+.table-md-col {
+  width: 120px;
+}
+
+.table-lg-col {
+  width: 150px;
 } 
