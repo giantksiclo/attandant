@@ -1021,15 +1021,15 @@ export const Dashboard = () => {
     
       {/* 헤더 */}
       <header className="app-header bg-white shadow-sm">
-        <div className="px-4 py-4 flex justify-between items-center">
-          <h1 className="text-lg font-bold text-gray-900">샤인치과 출결관리</h1>
+        <div className="px-4 py-4 flex flex-col sm:flex-row sm:justify-between sm:items-center">
+          <h1 className="text-lg font-bold text-gray-900 mb-2 sm:mb-0">샤인치과 출결관리</h1>
           
-          <div className="flex items-center space-x-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
             {/* 관리자인 경우 전체 직원 근무일지 버튼 표시 */}
             {profile && profile.role === 'admin' && (
               <button 
                 onClick={() => navigate('/employee-report')}
-                className="px-3 py-2 text-sm font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+                className="px-3 py-1.5 text-sm font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
               >
                 전체 직원 근무일지
               </button>
@@ -1048,7 +1048,7 @@ export const Dashboard = () => {
                     profile.name?.[0]?.toUpperCase() || '?'
                   )}
                 </div>
-                <span className="text-sm font-medium text-gray-700">
+                <span className="text-sm font-medium text-gray-700 mr-2">
                   {profile.name || '이름 없음'}
                 </span>
               </div>
@@ -1056,7 +1056,7 @@ export const Dashboard = () => {
             
             <button
               onClick={handleLogout}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-gray-500 hover:text-gray-700 whitespace-nowrap"
             >
               로그아웃
             </button>
@@ -1066,8 +1066,8 @@ export const Dashboard = () => {
 
       {/* 계정 정보 섹션 */}
       <div className="bg-white shadow-sm px-4 py-3 mb-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center mb-2 sm:mb-0">
             <div className="h-12 w-12 rounded-full bg-blue-500 flex items-center justify-center text-white text-lg mr-3">
               {profile && profile.photo_url ? (
                 <img 
@@ -1096,14 +1096,16 @@ export const Dashboard = () => {
               </p>
             </div>
           </div>
-          <div className="flex flex-col items-end">
-            <p className="text-sm text-gray-500 mb-1">
+          <div className="flex flex-col items-start sm:items-end">
+            <p className="text-sm text-gray-500 mb-1 whitespace-normal">
               {new Date().toLocaleDateString('ko-KR', { 
                 year: 'numeric', 
                 month: 'long', 
-                day: 'numeric', 
-                weekday: 'long' 
+                day: 'numeric'
               })}
+              <span className="ml-1">
+                {new Date().toLocaleDateString('ko-KR', { weekday: 'long' })}
+              </span>
             </p>
           </div>
         </div>
@@ -1248,9 +1250,8 @@ export const Dashboard = () => {
                   ))}
                 </div>
                 
-                <p className="text-xs text-gray-500 mt-3">
-                  * 근무일이 아니거나 근무시간 외의 출퇴근은 자동으로 시간외근무로 기록됩니다.
-                </p>
+               
+                
               </div>
             )}
             
@@ -1438,13 +1439,10 @@ export const Dashboard = () => {
         
         {/* 이번달 기록 */}
         <div className="bg-white shadow rounded-xl p-5 mb-5">
-          <div 
-            className="flex justify-between items-center mb-2 cursor-pointer" 
-            onClick={toggleMonthCalendar}
-          >
-            <div className="flex items-center">
-              <h2 className="text-lg font-bold text-gray-900">이번달 기록</h2>
-              <div className="flex ml-2 flex-wrap gap-1">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 sm:mb-2">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900 mb-2 sm:mb-0">이번달 기록</h2>
+              <div className="flex flex-wrap gap-1 my-2">
                 {/* 총 근무시간 표시 */}
                 <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
                   총 근무시간 {formatMinutesToHoursAndMinutes(calculateTotalWorkMinutes())}
@@ -1466,18 +1464,21 @@ export const Dashboard = () => {
                 )}
                 {currentUserHolidayWorkMinutes.exceededMinutes > 0 && (
                   <span className="px-2 py-1 bg-red-200 text-red-800 text-xs font-medium rounded-full">
-                    휴일초과 {formatMinutesToHoursAndMinutes(currentUserHolidayWorkMinutes.exceededMinutes)}
+                    휴일 8시간 초과 {formatMinutesToHoursAndMinutes(currentUserHolidayWorkMinutes.exceededMinutes)}
                   </span>
                 )}
               </div>
             </div>
-            <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
+            <button 
+              onClick={toggleMonthCalendar}
+              className="text-blue-600 hover:text-blue-700 text-sm font-medium mt-2 sm:mt-0"
+            >
               {showMonthCalendar ? '접기' : '달력 보기'}
             </button>
           </div>
           
           {showMonthCalendar ? (
-            <div className="mt-4">
+            <div className="mt-2">
               <AttendanceCalendar records={monthRecords} workSettings={workSettings} holidayWorks={holidayWorks} />
             </div>
           ) : (

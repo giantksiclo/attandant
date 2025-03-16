@@ -121,7 +121,18 @@ table {
   border-collapse: collapse;
 }
 
-th, td {
+th {
+  white-space: nowrap;
+  text-align: left;
+  vertical-align: middle;
+  word-break: keep-all;
+  padding: 8px 4px;
+  min-width: 60px;
+  overflow-wrap: break-word;
+  font-size: 0.8rem;
+}
+
+td {
   white-space: normal;
   text-align: left;
   vertical-align: middle;

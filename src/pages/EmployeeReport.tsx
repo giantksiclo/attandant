@@ -405,36 +405,41 @@ export const EmployeeReport = () => {
           ) : (
             <div className="overflow-x-auto">
               <div className="table-container">
-                <table className="w-full table-auto">
+                <table className="w-full table-auto" style={{minWidth: "650px"}}>
                   <thead className="bg-gray-50">
                     <tr>
                       <th 
-                        className="px-4 py-2 text-left text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        className="px-4 py-2 text-left text-sm font-medium text-gray-500 border-b cursor-pointer"
                         onClick={() => handleSort('name')}
+                        style={{width: "25%"}}
                       >
                         이름 {renderSortIndicator('name')}
                       </th>
                       <th 
-                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer"
                         onClick={() => handleSort('totalWorkMinutes')}
+                        style={{width: "20%"}}
                       >
                         총 근무시간 {renderSortIndicator('totalWorkMinutes')}
                       </th>
                       <th 
-                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer"
                         onClick={() => handleSort('overtimeMinutes')}
+                        style={{width: "18%"}}
                       >
                         시간외 근무 {renderSortIndicator('overtimeMinutes')}
                       </th>
                       <th 
-                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer"
                         onClick={() => handleSort('holidayWorkMinutes')}
+                        style={{width: "18%"}}
                       >
                         휴일 근무 {renderSortIndicator('holidayWorkMinutes')}
                       </th>
                       <th 
-                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer table-md-col"
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer whitespace-nowrap"
                         onClick={() => handleSort('holidayExceededMinutes')}
+                        style={{width: "19%"}}
                       >
                         휴일 8시간 초과 {renderSortIndicator('holidayExceededMinutes')}
                       </th>

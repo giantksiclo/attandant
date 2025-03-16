@@ -346,32 +346,32 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
 
   return (
     <div className="bg-white rounded-xl shadow-sm p-2 sm:p-4">
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-center mb-2">
         <button 
           onClick={goToPrevMonth}
-          className="p-2 text-gray-600 hover:text-gray-900 text-xl"
+          className="p-1 text-gray-600 hover:text-gray-900 text-lg"
           aria-label="이전 달"
         >
           &lsaquo;
         </button>
-        <h3 className="text-base sm:text-lg font-bold">
+        <h3 className="text-sm sm:text-base font-bold">
           {currentYear}년 {monthNames[currentMonth]}
         </h3>
         <button 
           onClick={goToNextMonth}
-          className="p-2 text-gray-600 hover:text-gray-900 text-xl"
+          className="p-1 text-gray-600 hover:text-gray-900 text-lg"
           aria-label="다음 달"
         >
           &rsaquo;
         </button>
       </div>
       
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-0.5">
         {/* 요일 헤더 */}
         {dayNames.map((day, index) => (
           <div 
             key={day} 
-            className={`text-center py-1 sm:py-2 text-xs sm:text-sm font-medium ${
+            className={`text-center py-1 text-[10px] sm:text-xs font-medium ${
               index === 0 ? 'text-red-500' : index === 6 ? 'text-blue-500' : 'text-gray-700'
             }`}
           >
@@ -384,7 +384,7 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
           week.map((day, dayIndex) => (
             <div 
               key={`${weekIndex}-${dayIndex}`}
-              className={`p-0.5 min-h-16 sm:min-h-20 border border-gray-100 ${
+              className={`p-0.5 min-h-[4.5rem] sm:min-h-24 border border-gray-100 ${
                 day.date 
                   ? day.status?.isHoliday 
                     ? 'bg-red-50' // 공휴일인 경우 연한 빨간색 배경
@@ -396,7 +396,7 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
             >
               {day.date && (
                 <>
-                  <div className={`text-xs font-medium mb-1 ${
+                  <div className={`text-xs font-medium mb-0.5 ${
                     day.status?.isHoliday
                       ? 'text-red-600 font-bold' // 공휴일인 경우 빨간색 글씨와 볼드체
                       : dayIndex === 0 
@@ -406,22 +406,47 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
                           : 'text-gray-700'
                   }`}>
                     {day.date}
-                    {day.status?.isHoliday && (
-                      <span className="ml-1 text-[8px] text-red-500">
-                        ({day.status.holidayDescription})
-                      </span>
-                    )}
                   </div>
                   
                   {/* 근무 상태 정보 */}
                   {day.status && (
-                    <div className="flex flex-col space-y-1">
+                    <div className="flex flex-col space-y-0.5 mt-0.5">
+                      {/* 시간외 근무 */}
+                      {day.records.some(r => r.record_type === 'overtime_end') && day.status?.overtimeMinutes && day.status?.overtimeMinutes > 0 && (
+                        <div className="flex items-center">
+                          <div className="h-1.5 w-1.5 bg-purple-500 rounded-full"></div>
+                          <span className="text-[7px] sm:text-[8px] text-purple-700 font-medium ml-0.5">
+                            {day.status.overtimeMinutes}분
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* 공휴일 근무 */}
+                      {day.status?.isHoliday && day.status?.holidayWorkMinutes && day.status?.holidayWorkMinutes > 0 && (
+                        <div className="flex items-center">
+                          <div className="h-1.5 w-1.5 bg-red-500 rounded-full"></div>
+                          <span className="text-[7px] sm:text-[8px] text-red-700 font-medium ml-0.5">
+                            {day.status.holidayWorkMinutes > 480 ? 480 : day.status.holidayWorkMinutes}분
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* 휴일 8시간 초과 */}
+                      {day.status?.isHolidayWorkExceeded && day.status?.holidayWorkMinutes && day.status?.holidayWorkMinutes > 480 && (
+                        <div className="flex items-center">
+                          <div className="h-1.5 w-1.5 bg-red-600 rounded-full"></div>
+                          <span className="text-[7px] sm:text-[8px] text-red-700 font-medium ml-0.5">
+                            {day.status.holidayWorkMinutes - 480}분
+                          </span>
+                        </div>
+                      )}
+                      
                       {/* 지각 정보 */}
                       {day.status.isLate && day.status.minutesLate && day.status.minutesLate > 0 && (
                         <div className="flex items-center">
-                          <div className="h-2 w-2 bg-amber-500 rounded-full mr-1"></div>
-                          <span className="text-[9px] sm:text-[10px] text-amber-700 font-medium">
-                            {day.status.minutesLate}분 지각
+                          <div className="h-1.5 w-1.5 bg-amber-500 rounded-full"></div>
+                          <span className="text-[7px] sm:text-[8px] text-amber-700 font-medium ml-0.5">
+                            {day.status.minutesLate}분
                           </span>
                         </div>
                       )}
@@ -429,42 +454,12 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
                       {/* 조퇴 정보 */}
                       {day.status.isEarlyLeave && day.status.minutesEarly && day.status.minutesEarly > 0 && (
                         <div className="flex items-center">
-                          <div className="h-2 w-2 bg-amber-500 rounded-full mr-1"></div>
-                          <span className="text-[9px] sm:text-[10px] text-amber-700 font-medium">
-                            {day.status.minutesEarly}분 조퇴
+                          <div className="h-1.5 w-1.5 bg-amber-500 rounded-full"></div>
+                          <span className="text-[7px] sm:text-[8px] text-amber-700 font-medium ml-0.5">
+                            {day.status.minutesEarly}분
                           </span>
                         </div>
                       )}
-                      
-                      {/* 시간외 근무 정보 */}
-                      {day.records.some(r => r.record_type === 'overtime_end') && day.status?.overtimeMinutes && day.status?.overtimeMinutes > 0 && day.status?.overtimeFormatted && (
-                        <div className="flex items-center">
-                          <div className="h-2 w-2 bg-purple-500 rounded-full mr-1"></div>
-                          <span className="text-[9px] sm:text-[10px] text-purple-700 font-medium">
-                            시간외 {day.status.overtimeFormatted}
-                          </span>
-                        </div>
-                      )}
-                      
-                      {/* 공휴일 근무 정보 */}
-                      {day.status?.isHoliday && day.status?.holidayWorkMinutes && day.status?.holidayWorkMinutes > 0 && (
-                        <div className="flex items-center">
-                          <div className="h-2 w-2 bg-red-500 rounded-full mr-1"></div>
-                          <span className="text-[9px] sm:text-[10px] text-red-700 font-medium">
-                            {day.status?.holidayWorkMinutes > 480 
-                              ? <>공휴일 8시간<span className="text-purple-700 font-bold">(초과 {formatMinutesToHoursAndMinutes(day.status.holidayWorkMinutes - 480)})</span></>
-                              : `공휴일 ${day.status.holidayWorkFormatted}`
-                            }
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  
-                  {/* 기록 개수 표시 */}
-                  {day.records.length > 0 && (
-                    <div className="mt-1 text-[8px] sm:text-[9px] text-gray-500">
-                      {day.records.length}건의 기록
                     </div>
                   )}
                 </>
@@ -475,18 +470,22 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
       </div>
       
       {/* 범례 */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-4 text-[10px] sm:text-xs text-gray-600">
-        <div className="flex items-center space-x-1">
-          <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-          <span>지각/조퇴</span>
+      <div className="mt-2 flex flex-wrap items-center gap-1 sm:gap-2 text-[8px] sm:text-[10px] text-gray-600">
+        <div className="flex items-center">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+          <span className="ml-0.5">시간외</span>
         </div>
-        <div className="flex items-center space-x-1">
-          <span className="w-2 h-2 rounded-full bg-purple-500"></span>
-          <span>시간외 근무</span>
+        <div className="flex items-center ml-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+          <span className="ml-0.5">공휴일</span>
         </div>
-        <div className="flex items-center space-x-1">
-          <span className="w-2 h-2 rounded-full bg-red-500"></span>
-          <span>공휴일 근무</span>
+        <div className="flex items-center ml-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-600"></span>
+          <span className="ml-0.5">휴일 8시간 초과</span>
+        </div>
+        <div className="flex items-center ml-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+          <span className="ml-0.5">지각/조퇴</span>
         </div>
       </div>
     </div>
