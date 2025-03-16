@@ -1021,10 +1021,10 @@ export const Dashboard = () => {
     
       {/* 헤더 */}
       <header className="app-header bg-white shadow-sm">
-        <div className="px-4 py-4 flex flex-col sm:flex-row sm:justify-between sm:items-center">
-          <h1 className="text-lg font-bold text-gray-900 mb-2 sm:mb-0">샤인치과 출결관리</h1>
-          
-          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+        <div className="px-4 py-4 flex justify-between items-center">
+          <div className="flex items-center">
+            <h1 className="text-lg font-bold text-gray-900 mr-4">샤인치과 출결관리</h1>
+            
             {/* 관리자인 경우 전체 직원 근무일지 버튼 표시 */}
             {profile && profile.role === 'admin' && (
               <button 
@@ -1034,33 +1034,14 @@ export const Dashboard = () => {
                 전체 직원 근무일지
               </button>
             )}
-            
-            {profile && (
-              <div className="flex items-center">
-                <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-sm mr-2">
-                  {profile.photo_url ? (
-                    <img 
-                      src={profile.photo_url} 
-                      alt={profile.name || '프로필'} 
-                      className="h-8 w-8 rounded-full object-cover"
-                    />
-                  ) : (
-                    profile.name?.[0]?.toUpperCase() || '?'
-                  )}
-                </div>
-                <span className="text-sm font-medium text-gray-700 mr-2">
-                  {profile.name || '이름 없음'}
-                </span>
-              </div>
-            )}
-            
-            <button
-              onClick={handleLogout}
-              className="text-sm text-gray-500 hover:text-gray-700 whitespace-nowrap"
-            >
-              로그아웃
-            </button>
           </div>
+          
+          <button
+            onClick={handleLogout}
+            className="text-sm text-gray-500 hover:text-gray-700 whitespace-nowrap"
+          >
+            로그아웃
+          </button>
         </div>
       </header>
 
@@ -1096,18 +1077,25 @@ export const Dashboard = () => {
               </p>
             </div>
           </div>
-          <div className="flex flex-col items-start sm:items-end">
-            <p className="text-sm text-gray-500 mb-1 whitespace-normal">
-              {new Date().toLocaleDateString('ko-KR', { 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric'
-              })}
-              <span className="ml-1">
-                {new Date().toLocaleDateString('ko-KR', { weekday: 'long' })}
-              </span>
-            </p>
-          </div>
+        </div>
+      </div>
+
+      {/* 오늘 날짜 섹션 */}
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 shadow-sm px-4 py-5 mb-4 text-center rounded-lg">
+        <div className="flex justify-center items-center">
+          <svg className="w-6 h-6 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+          </svg>
+          <h2 className="text-2xl font-bold text-gray-800">
+            {new Date().toLocaleDateString('ko-KR', { 
+              year: 'numeric', 
+              month: 'long', 
+              day: 'numeric'
+            })}
+            <span className="ml-2 text-blue-600">
+              {new Date().toLocaleDateString('ko-KR', { weekday: 'long' })}
+            </span>
+          </h2>
         </div>
       </div>
 
