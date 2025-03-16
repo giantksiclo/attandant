@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase, fetchProfile, getMonthAttendance, getHolidayWorks, getWorkSettings, type Profile, type AttendanceRecord, type HolidayWork, type AttendanceSettings } from '../lib/supabase';
 import { formatMinutesToHoursAndMinutes, calculateWorkHours } from '../lib/qrUtils';
+import * as XLSX from 'xlsx';
 
 interface EmployeeStats {
   id: string;
@@ -31,6 +32,13 @@ export const EmployeeReport = () => {
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, AttendanceRecord[]>>({});
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
+  const [availableYearMonths, setAvailableYearMonths] = useState<{year: number, month: number}[]>([]);
+  const [minYearMonth, setMinYearMonth] = useState<{year: number, month: number} | null>(null);
+  const [maxYearMonth, setMaxYearMonth] = useState<{year: number, month: number} | null>(null);
 
   useEffect(() => {
     // 세션 확인 및 프로필 로드
@@ -98,6 +106,61 @@ export const EmployeeReport = () => {
         
         setAttendanceRecords(attendanceData);
         
+        // 출결 기록 날짜 범위 추출
+        const { data: distinctDates, error: datesError } = await supabase
+          .from('attendance_records')
+          .select('timestamp')
+          .order('timestamp');
+          
+        if (!datesError && distinctDates && distinctDates.length > 0) {
+          // 날짜로 변환하여 고유한 연월 추출
+          const yearMonthSet = new Set<string>();
+          distinctDates.forEach(record => {
+            const date = new Date(record.timestamp);
+            const yearMonth = `${date.getFullYear()}-${date.getMonth() + 1}`;
+            yearMonthSet.add(yearMonth);
+          });
+          
+          // 연월 목록 변환 및 정렬
+          const yearMonths: {year: number, month: number}[] = Array.from(yearMonthSet)
+            .map(ym => {
+              const [year, month] = ym.split('-').map(Number);
+              return { year, month };
+            })
+            .sort((a, b) => {
+              // 연도 기준 내림차순, 같은 연도면 월 기준 내림차순
+              if (a.year !== b.year) return a.year - b.year;
+              return a.month - b.month;
+            });
+            
+          setAvailableYearMonths(yearMonths);
+          
+          // 최소/최대 연월 설정
+          if (yearMonths.length > 0) {
+            setMinYearMonth(yearMonths[0]);
+            setMaxYearMonth(yearMonths[yearMonths.length - 1]);
+            
+            // 기본값으로 현재 날짜 설정 (현재 날짜가 범위 내에 있으면)
+            const now = new Date();
+            const currentYear = now.getFullYear();
+            const currentMonth = now.getMonth() + 1;
+            
+            // 현재 날짜가 데이터 범위 내에 있는지 확인
+            const isCurrentDateInRange = yearMonths.some(
+              ym => ym.year === currentYear && ym.month === currentMonth
+            );
+            
+            if (isCurrentDateInRange) {
+              setSelectedYear(currentYear);
+              setSelectedMonth(currentMonth);
+            } else {
+              // 현재 날짜가 범위 내에 없으면 가장 최근 데이터 사용
+              setSelectedYear(yearMonths[yearMonths.length - 1].year);
+              setSelectedMonth(yearMonths[yearMonths.length - 1].month);
+            }
+          }
+        }
+        
       } catch (error: any) {
         console.error('데이터 로드 오류:', error);
         setError('정보를 불러오는 중 오류가 발생했습니다.');
@@ -108,6 +171,42 @@ export const EmployeeReport = () => {
 
     checkSession();
   }, [navigate]);
+  
+  // 선택한 연월이 변경되면 출결 데이터 다시 로드
+  useEffect(() => {
+    const loadAttendanceData = async () => {
+      if (employees.length === 0) return;
+      
+      try {
+        setLoading(true);
+        const attendanceData: Record<string, AttendanceRecord[]> = {};
+        
+        for (const employee of employees) {
+          // 선택한 연월에 맞는 데이터만 조회
+          const { data: records, error } = await supabase
+            .from('attendance_records')
+            .select('*')
+            .eq('user_id', employee.id)
+            .gte('timestamp', `${selectedYear}-${selectedMonth.toString().padStart(2, '0')}-01`)
+            .lt('timestamp', selectedMonth === 12 
+              ? `${selectedYear + 1}-01-01` 
+              : `${selectedYear}-${(selectedMonth + 1).toString().padStart(2, '0')}-01`);
+            
+          if (!error) {
+            attendanceData[employee.id] = records || [];
+          }
+        }
+        
+        setAttendanceRecords(attendanceData);
+      } catch (error) {
+        console.error('출결 데이터 로드 오류:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadAttendanceData();
+  }, [employees, selectedYear, selectedMonth]);
   
   // 근무 상태 계산 함수 (Dashboard의 getAttendanceStatus 함수와 유사하게 구현)
   const getEmployeeAttendanceStatus = (records: AttendanceRecord[], settings: AttendanceSettings[]) => {
@@ -196,6 +295,15 @@ export const EmployeeReport = () => {
   useEffect(() => {
     if (employees.length === 0 || Object.keys(attendanceRecords).length === 0 || workSettings.length === 0) return;
     
+    // 부서 목록 추출
+    const deptSet = new Set<string>();
+    employees.forEach(emp => {
+      if (emp.department) {
+        deptSet.add(emp.department);
+      }
+    });
+    setDepartments(Array.from(deptSet).sort());
+
     const stats: EmployeeStats[] = employees.map(employee => {
       const records = attendanceRecords[employee.id] || [];
       
@@ -330,28 +438,181 @@ export const EmployeeReport = () => {
     }
   };
   
-  // 정렬된, 필터링된 직원 통계
-  const sortedEmployeeStats = [...employeeStats].sort((a, b) => {
-    if (sortField === 'name') {
-      return sortDirection === 'asc' 
-        ? a.name.localeCompare(b.name)
-        : b.name.localeCompare(a.name);
-    } else {
-      // 숫자 필드 정렬
-      const aValue = a[sortField];
-      const bValue = b[sortField];
+  // 정렬 및 필터링된 직원 통계
+  const filteredAndSortedEmployeeStats = employeeStats
+    .filter(stat => selectedDepartment === 'all' || employees.find(e => e.id === stat.id)?.department === selectedDepartment)
+    .sort((a, b) => {
+      if (sortField === 'name') {
+        return sortDirection === 'asc' 
+          ? a.name.localeCompare(b.name)
+          : b.name.localeCompare(a.name);
+      }
       
-      return sortDirection === 'asc' 
-        ? Number(aValue) - Number(bValue)
-        : Number(bValue) - Number(aValue);
-    }
-  });
+      // 수치 기반 정렬
+      return sortDirection === 'asc'
+        ? a[sortField] - b[sortField]
+        : b[sortField] - a[sortField];
+    });
+
+  // 부서 변경 핸들러
+  const handleDepartmentChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedDepartment(event.target.value);
+  };
   
   // 정렬 표시 함수
   const renderSortIndicator = (field: SortField) => {
     if (sortField !== field) return null;
     
     return sortDirection === 'asc' ? '↑' : '↓';
+  };
+  
+  // 이전 달로 이동
+  const goToPreviousMonth = () => {
+    if (!minYearMonth) return;
+    
+    let newYear = selectedYear;
+    let newMonth = selectedMonth - 1;
+    
+    if (newMonth < 1) {
+      newYear--;
+      newMonth = 12;
+    }
+    
+    // 최소 연월보다 작은지 확인
+    const isBeforeMinDate = 
+      newYear < minYearMonth.year || 
+      (newYear === minYearMonth.year && newMonth < minYearMonth.month);
+    
+    if (isBeforeMinDate) return;
+    
+    // 해당 연월에 데이터가 있는지 확인
+    const hasData = availableYearMonths.some(
+      ym => ym.year === newYear && ym.month === newMonth
+    );
+    
+    if (hasData) {
+      setSelectedYear(newYear);
+      setSelectedMonth(newMonth);
+    } else {
+      // 데이터가 없는 경우, 다음으로 가능한 이전 연월 찾기
+      let found = false;
+      
+      // 현재 선택된 연월보다 이전인 연월 중 가장 가까운 것 찾기
+      const sortedMonths = [...availableYearMonths].sort((a, b) => {
+        if (a.year !== b.year) return b.year - a.year;  // 연도 내림차순
+        return b.month - a.month;  // 같은 연도내에서는 월 내림차순
+      });
+      
+      for (const ym of sortedMonths) {
+        if (ym.year < newYear || (ym.year === newYear && ym.month < newMonth)) {
+          setSelectedYear(ym.year);
+          setSelectedMonth(ym.month);
+          found = true;
+          break;
+        }
+      }
+      
+      // 이전 데이터가 없으면 최소 연월로 설정
+      if (!found && minYearMonth) {
+        setSelectedYear(minYearMonth.year);
+        setSelectedMonth(minYearMonth.month);
+      }
+    }
+  };
+  
+  // 다음 달로 이동
+  const goToNextMonth = () => {
+    if (!maxYearMonth) return;
+    
+    let newYear = selectedYear;
+    let newMonth = selectedMonth + 1;
+    
+    if (newMonth > 12) {
+      newYear++;
+      newMonth = 1;
+    }
+    
+    // 최대 연월보다 큰지 확인
+    const isAfterMaxDate = 
+      newYear > maxYearMonth.year || 
+      (newYear === maxYearMonth.year && newMonth > maxYearMonth.month);
+    
+    if (isAfterMaxDate) return;
+    
+    // 해당 연월에 데이터가 있는지 확인
+    const hasData = availableYearMonths.some(
+      ym => ym.year === newYear && ym.month === newMonth
+    );
+    
+    if (hasData) {
+      setSelectedYear(newYear);
+      setSelectedMonth(newMonth);
+    } else {
+      // 데이터가 없는 경우, 다음으로 가능한 다음 연월 찾기
+      let found = false;
+      
+      // 현재 선택된 연월보다 이후인 연월 중 가장 가까운 것 찾기
+      const sortedMonths = [...availableYearMonths].sort((a, b) => {
+        if (a.year !== b.year) return a.year - b.year;  // 연도 오름차순
+        return a.month - b.month;  // 같은 연도내에서는 월 오름차순
+      });
+      
+      for (const ym of sortedMonths) {
+        if (ym.year > newYear || (ym.year === newYear && ym.month > newMonth)) {
+          setSelectedYear(ym.year);
+          setSelectedMonth(ym.month);
+          found = true;
+          break;
+        }
+      }
+      
+      // 다음 데이터가 없으면 최대 연월로 설정
+      if (!found && maxYearMonth) {
+        setSelectedYear(maxYearMonth.year);
+        setSelectedMonth(maxYearMonth.month);
+      }
+    }
+  };
+  
+  // 엑셀 파일 다운로드 함수
+  const downloadExcel = () => {
+    // 선택한 연월을 파일명에 포함
+    const yearMonthStr = `${selectedYear}년 ${selectedMonth}월`;
+    
+    // 엑셀에 넣을 데이터 생성 (필터링 적용)
+    const excelData = filteredAndSortedEmployeeStats.map(stat => {
+      const employee = employees.find(e => e.id === stat.id);
+      return {
+        '이름': stat.name,
+        '부서': employee?.department || '',
+        '총 근무시간': stat.totalWorkFormatted,
+        '시간외 근무': stat.overtimeFormatted,
+        '휴일 근무': stat.holidayWorkFormatted,
+        '휴일 8시간 초과': stat.holidayExceededFormatted
+      };
+    });
+    
+    // 워크시트 생성
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    
+    // 컬럼 폭 설정
+    const wscols = [
+      { wch: 20 }, // 이름 컬럼 폭
+      { wch: 15 }, // 부서 컬럼 폭
+      { wch: 15 }, // 총 근무시간 컬럼 폭
+      { wch: 15 }, // 시간외 근무 컬럼 폭
+      { wch: 15 }, // 휴일 근무 컬럼 폭
+      { wch: 15 }  // 휴일 8시간 초과 컬럼 폭
+    ];
+    worksheet['!cols'] = wscols;
+    
+    // 워크북 생성
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, `${yearMonthStr} 직원 근무 통계`);
+    
+    // 파일명에 부서 정보 추가
+    const deptText = selectedDepartment === 'all' ? '전체부서' : selectedDepartment;
+    XLSX.writeFile(workbook, `샤인치과_${deptText}_${yearMonthStr}_근무통계.xlsx`);
   };
   
   if (loading) {
@@ -396,11 +657,71 @@ export const EmployeeReport = () => {
         )}
 
         <div className="bg-white shadow rounded-xl p-5 mb-5">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">이번 달 직원별 근무 통계</h2>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
+            <div className="flex flex-col xs:flex-row gap-2 items-start xs:items-center">
+              <h2 className="text-lg font-bold text-gray-900">직원별 근무 통계</h2>
+              
+              <div className="flex items-center bg-blue-50 rounded-lg border border-blue-200 overflow-hidden">
+                <button 
+                  onClick={goToPreviousMonth}
+                  disabled={!minYearMonth || (selectedYear === minYearMonth.year && selectedMonth === minYearMonth.month)}
+                  className="px-2 py-1.5 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                
+                <span className="px-2 py-1.5 font-medium text-blue-700 text-sm flex-shrink-0">
+                  {selectedYear}년 {selectedMonth}월
+                </span>
+                
+                <button 
+                  onClick={goToNextMonth}
+                  disabled={!maxYearMonth || (selectedYear === maxYearMonth.year && selectedMonth === maxYearMonth.month)}
+                  className="px-2 py-1.5 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <select 
+                value={selectedDepartment}
+                onChange={handleDepartmentChange}
+                className="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm"
+              >
+                <option value="all">전체 부서</option>
+                {departments.map(dept => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+              
+              <button
+                onClick={downloadExcel}
+                className="px-3 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 flex items-center text-sm font-medium"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+                엑셀 다운로드
+              </button>
+            </div>
+          </div>
           
-          {sortedEmployeeStats.length === 0 ? (
+          {loading ? (
+            <div className="py-10 text-center">
+              <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+              <p className="mt-2 text-gray-600 text-sm">데이터 로딩 중...</p>
+            </div>
+          ) : filteredAndSortedEmployeeStats.length === 0 ? (
             <p className="text-gray-500 text-center py-4">
-              직원 정보가 없거나 근무 기록이 없습니다.
+              {selectedDepartment === 'all' 
+                ? '직원 정보가 없거나 근무 기록이 없습니다.' 
+                : '해당 부서에 직원이 없거나 근무 기록이 없습니다.'}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -446,13 +767,13 @@ export const EmployeeReport = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedEmployeeStats.map((stat) => (
+                    {filteredAndSortedEmployeeStats.map((stat) => (
                       <tr key={stat.id} className="hover:bg-gray-50">
                         <td className="px-4 py-3 text-sm font-medium text-gray-900 border-b">{stat.name}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700 text-right border-b">{stat.totalWorkFormatted}</td>
-                        <td className="px-4 py-3 text-sm text-purple-700 text-right border-b">{stat.overtimeFormatted}</td>
-                        <td className="px-4 py-3 text-sm text-red-700 text-right border-b">{stat.holidayWorkFormatted}</td>
-                        <td className="px-4 py-3 text-sm text-red-700 font-medium text-right border-b">{stat.holidayExceededFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.totalWorkFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.overtimeFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.holidayWorkFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.holidayExceededFormatted}</td>
                       </tr>
                     ))}
                     
@@ -460,16 +781,16 @@ export const EmployeeReport = () => {
                     <tr className="bg-gray-50">
                       <td className="px-4 py-3 text-sm font-bold text-gray-900">전체 합계</td>
                       <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
-                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.totalWorkMinutes, 0))}
+                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.totalWorkMinutes, 0))}
                       </td>
-                      <td className="px-4 py-3 text-sm font-bold text-purple-700 text-right">
-                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.overtimeMinutes, 0))}
+                      <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
+                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.overtimeMinutes, 0))}
                       </td>
-                      <td className="px-4 py-3 text-sm font-bold text-red-700 text-right">
-                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.holidayWorkMinutes, 0))}
+                      <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
+                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.holidayWorkMinutes, 0))}
                       </td>
-                      <td className="px-4 py-3 text-sm font-bold text-red-700 text-right">
-                        {formatMinutesToHoursAndMinutes(employeeStats.reduce((sum, stat) => sum + stat.holidayExceededMinutes, 0))}
+                      <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
+                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.holidayExceededMinutes, 0))}
                       </td>
                     </tr>
                   </tbody>
