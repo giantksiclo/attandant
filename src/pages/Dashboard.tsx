@@ -36,6 +36,10 @@ export const Dashboard = () => {
   const [holidayWorkHours, setHolidayWorkHours] = useState<number>(0);
   const [holidayDescription, setHolidayDescription] = useState<string>('');
   const [isUpdatingHoliday, setIsUpdatingHoliday] = useState(false);
+  // 직원용 공휴일 추가 시간외 근무시간 관련 상태 변수 추가
+  const [isExtraOvertimeModalOpen, setIsExtraOvertimeModalOpen] = useState(false);
+  const [extraOvertimeMinutes, setExtraOvertimeMinutes] = useState<number>(0);
+  const [employeeExtraOvertime, setEmployeeExtraOvertime] = useState<number>(0);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -930,6 +934,9 @@ export const Dashboard = () => {
       }
     });
     
+    // 직원이 추가로 입력한 시간외 근무시간 더하기
+    totalHolidayWorkMinutes += employeeExtraOvertime;
+    
     return totalHolidayWorkMinutes;
   };
   
@@ -941,6 +948,20 @@ export const Dashboard = () => {
   const currentUserHolidayWorkHours = currentUserHolidayWorkMinutes > 0
     ? (currentUserHolidayWorkMinutes / 60).toFixed(1)
     : '';
+
+  // 공휴일 추가 시간외 근무시간 저장 함수
+  const saveExtraOvertimeMinutes = () => {
+    if (extraOvertimeMinutes <= 0) {
+      setError('추가 시간외 근무시간을 입력해주세요.');
+      return;
+    }
+    
+    setEmployeeExtraOvertime(prev => prev + extraOvertimeMinutes);
+    setExtraOvertimeMinutes(0);
+    setIsExtraOvertimeModalOpen(false);
+    
+    alert('공휴일 추가 시간외 근무시간이 저장되었습니다.');
+  };
 
   if (loading) {
     return (
@@ -1250,6 +1271,22 @@ export const Dashboard = () => {
                 ? '✓ 시간외 근무 종료 완료' 
                 : actionLoading ? '처리 중...' : '시간외근무 종료 QR 스캔하기'}
             </button>
+            
+            {/* 공휴일 추가 시간외 근무시간 버튼 추가 */}
+            <button
+              onClick={() => setIsExtraOvertimeModalOpen(true)}
+              className="p-4 rounded-xl font-medium text-lg bg-red-600 text-white active:bg-red-700"
+            >
+              공휴일 추가 시간외 근무시간 입력
+            </button>
+            
+            {employeeExtraOvertime > 0 && (
+              <div className="p-3 bg-red-50 rounded-lg border border-red-200">
+                <p className="text-sm text-red-700 font-medium">
+                  추가 시간외 근무시간: {formatMinutesToHoursAndMinutes(employeeExtraOvertime)}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1683,6 +1720,67 @@ export const Dashboard = () => {
                 className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
               >
                 {isUpdatingHoliday ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 공휴일 추가 시간외 근무시간 입력 모달 */}
+      {isExtraOvertimeModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">공휴일 추가 시간외 근무시간 입력</h3>
+              <button 
+                onClick={() => setIsExtraOvertimeModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  추가 시간외 근무시간 (분)
+                </label>
+                <input
+                  type="number"
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={extraOvertimeMinutes}
+                  onChange={(e) => setExtraOvertimeMinutes(parseInt(e.target.value) || 0)}
+                  onFocus={(e) => e.target.select()} 
+                  onClick={(e) => e.currentTarget.select()}
+                  placeholder="예: 60 (60분)"
+                  min="0"
+                  step="10" 
+                />
+                {extraOvertimeMinutes > 0 && (
+                  <p className="mt-1 text-sm text-gray-500">
+                    {formatMinutesToHoursAndMinutes(extraOvertimeMinutes)}
+                  </p>
+                )}
+              </div>
+              
+              <p className="text-sm text-gray-600">
+                입력한 시간은 기존 공휴일 근무 시간에 추가되어 표시됩니다.
+              </p>
+            </div>
+            
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setIsExtraOvertimeModalOpen(false)}
+                className="flex-1 py-3 border-2 border-gray-300 rounded-lg text-gray-700 font-medium"
+              >
+                취소
+              </button>
+              <button
+                onClick={saveExtraOvertimeMinutes}
+                disabled={extraOvertimeMinutes <= 0}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                저장
               </button>
             </div>
           </div>
