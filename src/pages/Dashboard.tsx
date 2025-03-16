@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, type Profile, type AttendanceRecord } from '../lib/supabase';
+import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, updateProfile, updateUserMetadata, type Profile, type AttendanceRecord } from '../lib/supabase';
 import { QRScanner } from '../components/QRScanner';
 import { QRCodeGenerator } from '../components/QRCodeGenerator';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
@@ -21,6 +21,8 @@ export const Dashboard = () => {
   const [showQRCode, setShowQRCode] = useState(false);
   const [qrCodeType, setQrCodeType] = useState<'check_in' | 'check_out' | 'overtime_end' | null>(null);
   const [showMonthCalendar, setShowMonthCalendar] = useState(false);
+  const [userEmail, setUserEmail] = useState<string>('');
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -52,25 +54,61 @@ export const Dashboard = () => {
     const checkSession = async () => {
       try {
         setLoading(true);
+        console.log('세션 및 프로필 로드 시작');
+        
+        // 세션 가져오기
         const { data: { session } } = await supabase.auth.getSession();
+        console.log('현재 세션:', session ? `ID: ${session.user.id}, Email: ${session.user.email}` : '세션 없음');
 
         if (!session) {
           // 세션이 없으면 로그인 페이지로 이동
+          console.log('세션이 없어 로그인 페이지로 이동');
           navigate('/login');
           return;
         }
 
+        // 사용자 ID 저장 (세션에서 가져온 ID를 사용)
+        const userId = session.user.id;
+        console.log('사용할 사용자 ID:', userId);
+
+        // 사용자 이메일 설정
+        const userEmail = session.user.email;
+        if (userEmail) {
+          setUserEmail(userEmail);
+          console.log('사용자 이메일 설정됨:', userEmail);
+        }
+
         // 프로필 정보 로드
-        const profile = await fetchProfile(session.user.id);
-        setProfile(profile);
+        console.log('프로필 로드 시작 - 사용자 ID:', userId);
+        const profile = await fetchProfile(userId);
+        console.log('프로필 정보 로드됨:', profile);
+        
+        if (!profile) {
+          console.error('프로필을 불러오지 못했습니다. 다시 시도합니다.');
+          // 재시도
+          const retryProfile = await fetchProfile(userId);
+          if (retryProfile) {
+            setProfile(retryProfile);
+            console.log('재시도 후 프로필 로드 성공:', retryProfile);
+          } else {
+            console.error('재시도 후에도 프로필 로드 실패');
+            setError('프로필 정보를 불러오는 데 실패했습니다. 앱을 다시 시작해 주세요.');
+          }
+        } else {
+          setProfile(profile);
+        }
 
         // 오늘의 출결 기록 로드
-        const todayRecords = await getTodayAttendance(session.user.id);
+        const todayRecords = await getTodayAttendance(userId);
         setTodayRecords(todayRecords);
+        console.log('오늘의 출결 기록 로드됨:', todayRecords.length, '개');
         
         // 이번달 출결 기록 로드
-        const monthRecords = await getMonthAttendance(session.user.id);
+        const monthRecords = await getMonthAttendance(userId);
         setMonthRecords(monthRecords);
+        console.log('이번달 출결 기록 로드됨:', monthRecords.length, '개');
+        
+        console.log('세션 및 프로필 로드 완료');
       } catch (error) {
         console.error('세션/프로필 로드 오류:', error);
         setError('정보를 불러오는 중 오류가 발생했습니다.');
@@ -82,9 +120,13 @@ export const Dashboard = () => {
     checkSession();
 
     // 인증 상태 변경 구독
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('인증 상태 변경 감지:', event, session ? `사용자: ${session.user.email}` : '세션 없음');
       if (!session) {
         navigate('/login');
+      } else if (event === 'SIGNED_IN') {
+        // 로그인 이벤트 발생 시 프로필 다시 로드
+        checkSession();
       }
     });
 
@@ -185,6 +227,139 @@ export const Dashboard = () => {
     setShowMonthCalendar(!showMonthCalendar);
   };
 
+  // 프로필 업데이트 함수
+  const handleUpdateProfile = async (role: 'admin' | 'staff' = 'admin') => {
+    if (!profile) return;
+    
+    try {
+      setIsUpdatingProfile(true);
+      
+      // 프로필 데이터 준비
+      const profileData = {
+        id: profile.id,
+        role: role,
+        name: profile.name || '관리자',
+        department: profile.department || '경영',
+      };
+      
+      // 프로필 업데이트
+      const result = await updateProfile(profileData);
+      
+      if (!result.success) {
+        const errorMessage = result.error && typeof result.error === 'object' && result.error !== null
+          ? String(result.error) 
+          : '프로필 업데이트 중 오류가 발생했습니다.';
+        throw new Error(errorMessage);
+      }
+      
+      // 세션 새로고침으로 메타데이터 변경사항 적용
+      await supabase.auth.refreshSession();
+      
+      // 프로필 다시 로드
+      const updatedProfile = await fetchProfile(profile.id);
+      setProfile(updatedProfile);
+      
+      alert('프로필이 업데이트되었습니다. 관리자 권한이 적용되었습니다.');
+      
+      // 관리자 기능 표시를 위해 페이지 새로고침
+      if (role === 'admin' && profile.role !== 'admin') {
+        window.location.reload();
+      }
+    } catch (error: any) {
+      console.error('프로필 업데이트 오류:', error);
+      setError(error.message || '프로필 업데이트 중 오류가 발생했습니다.');
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
+  // 프로필 강제 생성 함수
+  const handleForceCreateProfile = async () => {
+    try {
+      setLoading(true);
+      
+      // 현재 인증된 사용자 정보 가져오기
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        alert('로그인이 필요합니다.');
+        navigate('/login');
+        return;
+      }
+      
+      console.log('프로필 강제 생성 시작 - 사용자 ID:', session.user.id);
+      
+      // 사용자 이름 설정
+      const userName = session.user.email?.split('@')[0] || '사용자';
+      const department = '미지정';
+      const role = 'admin';
+      
+      // 1. Auth 사용자 메타데이터 업데이트
+      const { success: metaSuccess } = await updateUserMetadata({
+        name: userName,
+        department: department,
+        role: role
+      });
+      
+      if (!metaSuccess) {
+        console.warn('사용자 메타데이터 업데이트 실패, 프로필 생성 계속 진행');
+      } else {
+        console.log('사용자 메타데이터 업데이트 성공');
+      }
+      
+      // 2. 프로필 데이터 직접 생성
+      const { error } = await supabase
+        .from('profiles')
+        .insert({
+          id: session.user.id,
+          name: userName,
+          department: department,
+          role: role,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          instance_id: 1 // 기본값 0 대신 1로 설정
+        });
+      
+      if (error) {
+        console.error('프로필 강제 생성 오류:', error);
+        
+        if (error.code === '23505') { // 중복 키
+          alert('이미 프로필이 존재합니다. 강제 업데이트를 진행합니다.');
+          
+          // 업데이트로 시도
+          const { error: updateError } = await supabase
+            .from('profiles')
+            .update({
+              name: userName,
+              department: department,
+              role: role,
+              updated_at: new Date().toISOString(),
+              instance_id: 1 // 기본값 0 대신 1로 설정
+            })
+            .eq('id', session.user.id);
+          
+          if (updateError) {
+            throw new Error('프로필 강제 업데이트 실패: ' + updateError.message);
+          }
+        } else {
+          throw new Error('프로필 강제 생성 실패: ' + error.message);
+        }
+      }
+      
+      // 3. 프로필 다시 로드 및 세션 새로고침
+      await supabase.auth.refreshSession();
+      const refreshedProfile = await fetchProfile(session.user.id);
+      setProfile(refreshedProfile);
+      
+      alert('프로필이 강제로 생성/업데이트되었습니다.');
+    } catch (error: any) {
+      console.error('프로필 강제 생성 오류:', error);
+      setError(error.message || '프로필 강제 생성 중 오류가 발생했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -248,6 +423,95 @@ export const Dashboard = () => {
           </div>
         </div>
       </header>
+
+      {/* 디버깅 정보 (개발 환경에서만 표시) */}
+      <div className="bg-yellow-50 p-2 text-xs text-yellow-800 border-b border-yellow-200">
+        <div>프로필 데이터: {profile ? '있음' : '없음'}</div>
+        <div>이메일: {userEmail || '없음'}</div>
+        <div>역할: {profile?.role || '없음'}</div>
+        <div>ID: {profile?.id || '없음'}</div>
+        <button
+          onClick={handleForceCreateProfile}
+          className="mt-1 px-2 py-0.5 text-xs bg-red-200 text-red-800 rounded hover:bg-red-300"
+        >
+          프로필 강제 생성/업데이트
+        </button>
+      </div>
+
+      {/* 계정 정보 섹션 */}
+      <div className="bg-white shadow-sm px-4 py-3 mb-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <div className="h-12 w-12 rounded-full bg-blue-500 flex items-center justify-center text-white text-lg mr-3">
+              {profile && profile.photo_url ? (
+                <img 
+                  src={profile.photo_url} 
+                  alt={profile?.name || '프로필'} 
+                  className="h-12 w-12 rounded-full object-cover"
+                />
+              ) : (
+                (profile?.name?.[0] || '?').toUpperCase()
+              )}
+            </div>
+            <div>
+              <div className="flex items-center">
+                <h2 className="text-lg font-bold text-gray-900">
+                  {profile?.name || '이름 정보 없음'}
+                </h2>
+                <span className={`ml-2 px-2 py-0.5 text-xs rounded-full ${
+                  profile?.role === 'admin' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
+                }`}>
+                  {profile?.role === 'admin' ? '관리자' : '직원'}
+                </span>
+                
+                {/* 프로필 업데이트 버튼 */}
+                <button
+                  onClick={() => handleUpdateProfile('admin')}
+                  disabled={isUpdatingProfile || profile?.role === 'admin'}
+                  className="ml-2 px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded-full hover:bg-green-200 disabled:opacity-50"
+                >
+                  {isUpdatingProfile 
+                    ? '처리 중...' 
+                    : profile?.role === 'admin' 
+                      ? '이미 관리자' 
+                      : '관리자로 설정'}
+                </button>
+              </div>
+              <p className="text-sm text-gray-600">
+                {profile?.department || '부서 정보 없음'} • 
+                <span className="text-blue-600"> {userEmail || '이메일 정보 없음'}</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col items-end">
+            <p className="text-sm text-gray-500 mb-1">
+              {new Date().toLocaleDateString('ko-KR', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric', 
+                weekday: 'long' 
+              })}
+            </p>
+            
+            {/* 프로필 강제 새로고침 버튼 */}
+            <div className="flex space-x-2">
+              <button
+                onClick={async () => {
+                  if (!profile) return;
+                  setLoading(true);
+                  const refreshedProfile = await fetchProfile(profile.id);
+                  setProfile(refreshedProfile);
+                  setLoading(false);
+                  alert('프로필 정보가 새로고침되었습니다.');
+                }}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                프로필 새로고침
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* 메인 컨텐츠 */}
       <main className="px-4 py-6">
