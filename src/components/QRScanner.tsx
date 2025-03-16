@@ -40,11 +40,6 @@ export const QRScanner: React.FC<QRScannerProps> = ({ onScan, onClose }) => {
     }
   };
 
-  const handleError = (err: Error) => {
-    console.error('QR 스캐너 오류:', err);
-    setError('카메라 접근에 실패했습니다.');
-  };
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl overflow-hidden w-full max-w-md shadow-xl">

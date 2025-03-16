@@ -70,6 +70,7 @@ export interface HolidayWork {
   description: string;
   created_by: string;
   created_at: string;
+  extra_overtime_minutes?: number; // 추가 시간외 근무시간 필드 추가
 }
 
 // 프로필 가져오기 함수 - 개선된 로직
@@ -502,6 +503,64 @@ export const deleteHolidayWork = async (id: string): Promise<{ success: boolean;
   }
 };
 
+// 공휴일 추가 시간외 근무시간 업데이트
+export const updateHolidayWorkExtraOvertime = async (
+  date: string,
+  userId: string,
+  extraOvertimeMinutes: number
+): Promise<{ success: boolean; error?: any; data?: HolidayWork }> => {
+  try {
+    // 해당 날짜의 공휴일 근무 기록 조회
+    const { data: existingData, error: queryError } = await supabase
+      .from('holiday_works')
+      .select('*')
+      .eq('date', date)
+      .single();
+    
+    if (queryError && queryError.code !== 'PGRST116') { // PGRST116: 결과가 없는 경우
+      return { success: false, error: queryError };
+    }
+    
+    if (!existingData) {
+      // 해당 날짜의 공휴일 근무 기록이 없는 경우 새로 생성
+      const newHolidayWork: HolidayWork = {
+        date: date,
+        work_minutes: 0, // 근무 시간은 0으로 설정
+        description: '추가 시간외 근무', // 기본 설명
+        created_by: userId,
+        created_at: new Date().toISOString(),
+        extra_overtime_minutes: extraOvertimeMinutes
+      };
+      
+      const { data: insertData, error: insertError } = await supabase
+        .from('holiday_works')
+        .insert(newHolidayWork)
+        .select();
+      
+      if (insertError) {
+        return { success: false, error: insertError };
+      }
+      
+      return { success: true, data: insertData[0] };
+    } else {
+      // 기존 공휴일 근무 기록이 있는 경우 업데이트
+      const { data: updateData, error: updateError } = await supabase
+        .from('holiday_works')
+        .update({ extra_overtime_minutes: extraOvertimeMinutes })
+        .eq('id', existingData.id)
+        .select();
+      
+      if (updateError) {
+        return { success: false, error: updateError };
+      }
+      
+      return { success: true, data: updateData[0] };
+    }
+  } catch (error) {
+    return { success: false, error };
+  }
+};
+
 // 사용자별 공휴일 근무 시간 계산
 export const calculateUserHolidayWorkMinutes = async (userId: string): Promise<number> => {
   try {
@@ -541,6 +600,11 @@ export const calculateUserHolidayWorkMinutes = async (userId: string): Promise<n
     holidayWorks.forEach(holiday => {
       if (userCheckInDates.includes(holiday.date)) {
         totalHolidayWorkMinutes += holiday.work_minutes;
+        
+        // 추가 시간외 근무시간이 있으면 합산
+        if (holiday.extra_overtime_minutes) {
+          totalHolidayWorkMinutes += holiday.extra_overtime_minutes;
+        }
       }
     });
     

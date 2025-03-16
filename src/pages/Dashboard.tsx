@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, updateProfile, updateUserMetadata, getWorkSettings, updateWorkSettings, getHolidayWorks, saveHolidayWork as saveHolidayWorkApi, deleteHolidayWork as deleteHolidayWorkApi, calculateUserHolidayWorkMinutes, type Profile, type AttendanceRecord, type AttendanceSettings, type HolidayWork } from '../lib/supabase';
+import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, getWorkSettings, updateWorkSettings, getHolidayWorks, saveHolidayWork as saveHolidayWorkApi, deleteHolidayWork as deleteHolidayWorkApi, updateHolidayWorkExtraOvertime, type Profile, type AttendanceRecord, type AttendanceSettings, type HolidayWork } from '../lib/supabase';
 import { QRScanner } from '../components/QRScanner';
 import { QRCodeGenerator } from '../components/QRCodeGenerator';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
@@ -23,7 +23,6 @@ export const Dashboard = () => {
   const [qrCodeType, setQrCodeType] = useState<'check_in' | 'check_out' | 'overtime_end' | null>(null);
   const [showMonthCalendar, setShowMonthCalendar] = useState(false);
   const [userEmail, setUserEmail] = useState<string>('');
-  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [workSettings, setWorkSettings] = useState<AttendanceSettings[]>([]);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempWorkSettings, setTempWorkSettings] = useState<AttendanceSettings[]>([]);
@@ -32,14 +31,12 @@ export const Dashboard = () => {
   const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
   const [holidayWorks, setHolidayWorks] = useState<HolidayWork[]>([]);
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string>('');
-  const [holidayWorkMinutes, setHolidayWorkMinutes] = useState<number>(0);
   const [holidayWorkHours, setHolidayWorkHours] = useState<number>(0);
   const [holidayDescription, setHolidayDescription] = useState<string>('');
   const [isUpdatingHoliday, setIsUpdatingHoliday] = useState(false);
   // 직원용 공휴일 추가 시간외 근무시간 관련 상태 변수 추가
   const [isExtraOvertimeModalOpen, setIsExtraOvertimeModalOpen] = useState(false);
   const [extraOvertimeMinutes, setExtraOvertimeMinutes] = useState<number>(0);
-  const [employeeExtraOvertime, setEmployeeExtraOvertime] = useState<number>(0);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -404,11 +401,15 @@ export const Dashboard = () => {
       
       result.workHours = workHours;
       
-      // 시간외 근무 계산 - 시간외 근무 종료를 찍은 경우에만 계산
-      if (overtimeEndRecord) {
-        // 시간외 근무 종료 기록이 있는 경우에만 시간외 근무로 카운팅
+      // 공휴일 근무 시간 체크
+      const checkInDateStr = `${checkInDate.getFullYear()}-${String(checkInDate.getMonth() + 1).padStart(2, '0')}-${String(checkInDate.getDate()).padStart(2, '0')}`;
+      const isHoliday = holidayWorks.some(h => h.date === checkInDateStr);
+      
+      // 시간외 근무 계산 - 시간외 근무 종료를 찍은 경우에만 계산 (공휴일 제외)
+      if (overtimeEndRecord && !isHoliday) {
+        // 시간외 근무 종료 기록이 있고 공휴일이 아닌 경우에만 시간외 근무로 카운팅
         if (isNonWorkingDay) {
-          // 비근무일(주말/휴일)인 경우 전체 시간을 시간외 근무로 계산
+          // 비근무일(주말/휴일이지만 공휴일로 지정되지 않은 경우)인 경우 전체 시간을 시간외 근무로 계산
           result.overtime = {
             minutes: workHours.totalMinutes,
             formatted: workHours.formattedTime
@@ -470,7 +471,27 @@ export const Dashboard = () => {
               minutes: overtimeMinutes,
               formatted: formatMinutesToHoursAndMinutes(overtimeMinutes)
             };
+            
+            // 총 근무시간에 시간외 근무시간 포함
+            result.totalWorkHours = {
+              minutes: workHours.totalMinutes + overtimeMinutes,
+              formatted: formatMinutesToHoursAndMinutes(workHours.totalMinutes + overtimeMinutes)
+            };
+          } else {
+            // 시간외 근무가 없으면 기본 근무시간이 총 근무시간
+            result.totalWorkHours = {
+              minutes: workHours.totalMinutes,
+              formatted: workHours.formattedTime
+            };
           }
+        }
+      } else {
+        // 퇴근 기록이 없는 경우에도 totalWorkHours 설정
+        if (result.workHours) {
+          result.totalWorkHours = {
+            minutes: result.workHours.totalMinutes,
+            formatted: result.workHours.formattedTime
+          };
         }
       }
     }
@@ -480,10 +501,39 @@ export const Dashboard = () => {
     const holidayWorkForThisDay = holidayWorks.find(h => h.date === checkInDateStr);
     
     if (holidayWorkForThisDay) {
+      // 오늘 날짜인지 확인
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const isToday = checkInDateStr === todayStr;
+      
+      let totalMinutes = holidayWorkForThisDay.work_minutes;
+      let extraOvertimeTotal = 0;
+      
+      // DB에 저장된 추가 시간외 근무시간이 있으면 추가
+      if (holidayWorkForThisDay.extra_overtime_minutes) {
+        totalMinutes += holidayWorkForThisDay.extra_overtime_minutes;
+        extraOvertimeTotal += holidayWorkForThisDay.extra_overtime_minutes;
+      }
+      
+      // 오늘이고, 방금 입력한 추가 시간외 근무시간이 아직 DB에 반영되지 않은 경우에만 추가
+      // DB에 저장된 extra_overtime_minutes가 없거나 employeeExtraOvertime이 더 큰 경우만 추가
+      if (isToday && (!holidayWorkForThisDay.extra_overtime_minutes || extraOvertimeMinutes > holidayWorkForThisDay.extra_overtime_minutes)) {
+        // DB에 저장된 값이 없는 경우 전체 값을 더하고, 있는 경우 차이만 더함
+        const additionalMinutes = holidayWorkForThisDay.extra_overtime_minutes 
+          ? extraOvertimeMinutes - holidayWorkForThisDay.extra_overtime_minutes 
+          : extraOvertimeMinutes;
+        
+        if (additionalMinutes > 0) {
+          totalMinutes += additionalMinutes;
+          extraOvertimeTotal += additionalMinutes;
+        }
+      }
+      
       result.holidayWork = {
-        minutes: holidayWorkForThisDay.work_minutes,
-        formatted: formatMinutesToHoursAndMinutes(holidayWorkForThisDay.work_minutes),
-        description: holidayWorkForThisDay.description
+        minutes: totalMinutes,
+        formatted: formatMinutesToHoursAndMinutes(totalMinutes),
+        description: holidayWorkForThisDay.description,
+        extraMinutes: extraOvertimeTotal
       };
     }
     
@@ -509,15 +559,24 @@ export const Dashboard = () => {
       return acc;
     }, {} as Record<string, AttendanceRecord[]>);
     
-    // 각 날짜별 시간외 근무 계산 후 합산 - 시간외 근무 종료 찍은 날만 계산
+    // 각 날짜별 시간외 근무 계산 후 합산 - 시간외 근무 종료 찍은 날만 계산하고 공휴일 제외
     let totalOvertimeMinutes = 0;
     
     Object.values(recordsByDate).forEach(dayRecords => {
       // 해당 날짜에 시간외 근무 종료 기록이 있는 경우에만 계산
       if (dayRecords.some(r => r.record_type === 'overtime_end')) {
-        const status = getAttendanceStatus(dayRecords);
-        if (status && status.overtime) {
-          totalOvertimeMinutes += status.overtime.minutes;
+        // 공휴일인지 확인
+        const dateRecord = dayRecords[0]; // 해당 일자의 첫 번째 기록으로 날짜 확인
+        const recordDate = new Date(dateRecord.timestamp);
+        const dateStr = `${recordDate.getFullYear()}-${String(recordDate.getMonth() + 1).padStart(2, '0')}-${String(recordDate.getDate()).padStart(2, '0')}`;
+        const isHoliday = holidayWorks.some(h => h.date === dateStr);
+        
+        // 공휴일이 아닌 경우에만 시간외 근무 시간 합산
+        if (!isHoliday) {
+          const status = getAttendanceStatus(dayRecords);
+          if (status && status.overtime) {
+            totalOvertimeMinutes += status.overtime.minutes;
+          }
         }
       }
     });
@@ -569,149 +628,18 @@ export const Dashboard = () => {
     ? formatMinutesToHoursAndMinutes(monthlyLateMinutes) 
     : '';
 
-  // 프로필 업데이트 함수
-  const handleUpdateProfile = async (role: 'admin' | 'staff' = 'admin') => {
-    if (!profile) return;
-    
-    try {
-      setIsUpdatingProfile(true);
-      
-      // 프로필 데이터 준비
-      const profileData = {
-        id: profile.id,
-        role: role,
-        name: profile.name || '관리자',
-        department: profile.department || '경영',
-      };
-      
-      // 프로필 업데이트
-      const result = await updateProfile(profileData);
-      
-      if (!result.success) {
-        const errorMessage = result.error && typeof result.error === 'object' && result.error !== null
-          ? String(result.error) 
-          : '프로필 업데이트 중 오류가 발생했습니다.';
-        throw new Error(errorMessage);
-      }
-      
-      // 세션 새로고침으로 메타데이터 변경사항 적용
-      await supabase.auth.refreshSession();
-      
-      // 프로필 다시 로드
-      const updatedProfile = await fetchProfile(profile.id);
-      setProfile(updatedProfile);
-      
-      alert('프로필이 업데이트되었습니다. 관리자 권한이 적용되었습니다.');
-      
-      // 관리자 기능 표시를 위해 페이지 새로고침
-      if (role === 'admin' && profile.role !== 'admin') {
-        window.location.reload();
-      }
-    } catch (error: any) {
-      console.error('프로필 업데이트 오류:', error);
-      setError(error.message || '프로필 업데이트 중 오류가 발생했습니다.');
-    } finally {
-      setIsUpdatingProfile(false);
-    }
-  };
-
-  // 프로필 강제 생성 함수
-  const handleForceCreateProfile = async () => {
-    try {
-      setLoading(true);
-      
-      // 현재 인증된 사용자 정보 가져오기
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        alert('로그인이 필요합니다.');
-        navigate('/login');
-        return;
-      }
-      
-      console.log('프로필 강제 생성 시작 - 사용자 ID:', session.user.id);
-      
-      // 사용자 메타데이터에서 이름 가져오기
-      const userName = session.user.user_metadata?.name || session.user.email?.split('@')[0] || '사용자';
-      const department = session.user.user_metadata?.department || '미지정';
-      const role = 'staff';
-      
-      // 1. Auth 사용자 메타데이터 업데이트
-      const { success: metaSuccess } = await updateUserMetadata({
-        name: userName,
-        department: department,
-        role: role
-      });
-      
-      if (!metaSuccess) {
-        console.warn('사용자 메타데이터 업데이트 실패, 프로필 생성 계속 진행');
-      } else {
-        console.log('사용자 메타데이터 업데이트 성공');
-      }
-      
-      // 2. 프로필 데이터 직접 생성
-      const { error } = await supabase
-        .from('profiles_new')
-        .insert({
-          id: session.user.id,
-          name: userName,
-          department: department,
-          role: role,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        });
-      
-      if (error) {
-        console.error('프로필 강제 생성 오류:', error);
-        
-        if (error.code === '23505') { // 중복 키
-          alert('이미 프로필이 존재합니다. 강제 업데이트를 진행합니다.');
-          
-          // 업데이트로 시도
-          const { error: updateError } = await supabase
-            .from('profiles_new')
-            .update({
-              name: userName,
-              department: department,
-              role: role,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', session.user.id);
-          
-          if (updateError) {
-            throw new Error('프로필 강제 업데이트 실패: ' + updateError.message);
-          }
-        } else {
-          throw new Error('프로필 강제 생성 실패: ' + error.message);
-        }
-      }
-      
-      // 3. 프로필 다시 로드 및 세션 새로고침
-      await supabase.auth.refreshSession();
-      const refreshedProfile = await fetchProfile(session.user.id);
-      setProfile(refreshedProfile);
-      
-      alert('프로필이 강제로 생성/업데이트되었습니다.');
-    } catch (error: any) {
-      console.error('프로필 강제 생성 오류:', error);
-      setError(error.message || '프로필 강제 생성 중 오류가 발생했습니다.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 요일명 반환 함수
-  const getDayName = (dayOfWeek: number): string => {
-    const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
-    return dayNames[dayOfWeek] || '알 수 없음';
-  };
-
   // 근무시간 설정 열기
   const openWorkSettings = () => {
     if (workSettings.length > 0) {
       setTempWorkSettings([...workSettings]);
     }
     setIsSettingsModalOpen(true);
+  };
+  
+  // 요일명 반환 함수
+  const getDayName = (dayOfWeek: number): string => {
+    const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+    return dayNames[dayOfWeek] || '알 수 없음';
   };
   
   // 설정 탭 변경 함수
@@ -826,7 +754,6 @@ export const Dashboard = () => {
       // 입력 필드 초기화
       setSelectedHolidayDate('');
       setHolidayWorkHours(0);
-      setHolidayWorkMinutes(0);
       setHolidayDescription('');
       setIsHolidayModalOpen(false);
       
@@ -862,13 +789,48 @@ export const Dashboard = () => {
     }
   };
 
-  // 시간을 HH:MM 형식으로 포맷팅하는 함수 (기존 함수)
-  const formatMinutesToHoursMinutes = (minutes: number) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}시간 ${mins}분`;
+  // 공휴일 추가 시간외 근무시간 저장 함수
+  const saveExtraOvertimeMinutes = async () => {
+    if (extraOvertimeMinutes <= 0) {
+      setError('추가 시간외 근무시간을 입력해주세요.');
+      return;
+    }
+    
+    if (!profile) {
+      setError('프로필 정보가 없습니다.');
+      return;
+    }
+    
+    try {
+      setActionLoading(true);
+      
+      // 오늘 날짜 가져오기 (YYYY-MM-DD 형식)
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      
+      // 추가 시간외 근무시간 DB에 저장
+      const result = await updateHolidayWorkExtraOvertime(dateStr, profile.id, extraOvertimeMinutes);
+      
+      if (!result.success) {
+        throw new Error(result.error?.message || '저장 중 오류가 발생했습니다.');
+      }
+      
+      // 입력 필드 초기화 및 모달 닫기
+      setExtraOvertimeMinutes(0);
+      setIsExtraOvertimeModalOpen(false);
+      
+      // 공휴일 목록 새로고침 (최신 데이터 반영)
+      await loadHolidayWorks();
+      
+      alert('공휴일 추가 시간외 근무시간이 저장되었습니다.');
+    } catch (error: any) {
+      console.error('추가 시간외 근무시간 저장 오류:', error);
+      setError('추가 시간외 근무시간 저장 중 오류가 발생했습니다: ' + error.message);
+    } finally {
+      setActionLoading(false);
+    }
   };
-  
+
   // 공휴일 근무 시간 표시 함수 (8시간 초과 시 별도 표시)
   const formatHolidayWorkTime = (minutes: number) => {
     const standardMinutes = 480; // 8시간 = 480분
@@ -914,7 +876,11 @@ export const Dashboard = () => {
   // 사용자별 공휴일 근무 시간 계산 (로컬 계산용)
   const calculateUserHolidayWorkMinutesLocal = (userId: string) => {
     if (!holidayWorks || holidayWorks.length === 0 || !monthRecords || monthRecords.length === 0) {
-      return 0;
+      return { 
+        totalMinutes: 0, 
+        regularMinutes: 0, 
+        exceededMinutes: 0 
+      };
     }
     
     // 사용자의 출근 기록이 있는 날짜만 추출
@@ -927,40 +893,101 @@ export const Dashboard = () => {
     
     // 공휴일 중 사용자가 출근한 날짜에 대한 근무 시간 합산
     let totalHolidayWorkMinutes = 0;
+    let regularHolidayWorkMinutes = 0; // 8시간 이하 근무 합계
+    let exceededHolidayWorkMinutes = 0; // 8시간 초과분 합계
+    const standardMinutes = 480; // 8시간 = 480분
     
     holidayWorks.forEach(holiday => {
       if (userCheckInDates.includes(holiday.date)) {
-        totalHolidayWorkMinutes += holiday.work_minutes;
+        let minutes = holiday.work_minutes || 0;
+        
+        // 추가 시간외 근무시간이 있으면 더함
+        if (holiday.extra_overtime_minutes) {
+          minutes += holiday.extra_overtime_minutes;
+        }
+        
+        totalHolidayWorkMinutes += minutes;
+        
+        // 8시간(480분) 기준으로 나누어 계산
+        if (minutes <= standardMinutes) {
+          regularHolidayWorkMinutes += minutes;
+        } else {
+          regularHolidayWorkMinutes += standardMinutes;
+          exceededHolidayWorkMinutes += (minutes - standardMinutes);
+        }
       }
     });
     
-    // 직원이 추가로 입력한 시간외 근무시간 더하기
-    totalHolidayWorkMinutes += employeeExtraOvertime;
-    
-    return totalHolidayWorkMinutes;
+    return {
+      totalMinutes: totalHolidayWorkMinutes,
+      regularMinutes: regularHolidayWorkMinutes,
+      exceededMinutes: exceededHolidayWorkMinutes
+    };
   };
   
   // 현재 사용자의 공휴일 근무 시간 계산
-  const currentUserHolidayWorkMinutes = profile ? calculateUserHolidayWorkMinutesLocal(profile.id) : 0;
-  const currentUserHolidayWorkFormatted = currentUserHolidayWorkMinutes > 0 
-    ? formatHolidayWorkTime(currentUserHolidayWorkMinutes) 
-    : '';
-  const currentUserHolidayWorkHours = currentUserHolidayWorkMinutes > 0
-    ? (currentUserHolidayWorkMinutes / 60).toFixed(1)
-    : '';
+  const currentUserHolidayWorkMinutes = profile ? calculateUserHolidayWorkMinutesLocal(profile.id) : { 
+    totalMinutes: 0, 
+    regularMinutes: 0, 
+    exceededMinutes: 0 
+  };
 
-  // 공휴일 추가 시간외 근무시간 저장 함수
-  const saveExtraOvertimeMinutes = () => {
-    if (extraOvertimeMinutes <= 0) {
-      setError('추가 시간외 근무시간을 입력해주세요.');
-      return;
+  // 총 근무시간 계산 함수 (공휴일 및 휴무일 제외 근무 + 시간외 + 휴일 근무 합산)
+  const calculateTotalWorkMinutes = () => {
+    if (!profile || !monthRecords || monthRecords.length === 0 || !workSettings || workSettings.length === 0) {
+      return 0;
     }
     
-    setEmployeeExtraOvertime(prev => prev + extraOvertimeMinutes);
-    setExtraOvertimeMinutes(0);
-    setIsExtraOvertimeModalOpen(false);
+    // 1. 공휴일과 휴무일을 제외한 일반 근무시간 계산
+    let regularWorkMinutes = 0;
     
-    alert('공휴일 추가 시간외 근무시간이 저장되었습니다.');
+    // 날짜별로 기록 그룹화
+    const recordsByDate = monthRecords.reduce((acc, record) => {
+      const date = new Date(record.timestamp);
+      const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
+      }
+      
+      acc[dateKey].push(record);
+      return acc;
+    }, {} as Record<string, AttendanceRecord[]>);
+    
+    // 각 날짜별 근무시간 계산 (공휴일 및 휴무일 제외)
+    Object.values(recordsByDate).forEach(dayRecords => {
+      const checkInRecord = dayRecords.find(r => r.record_type === 'check_in');
+      if (!checkInRecord) return;
+      
+      // 출근 날짜 정보
+      const recordDate = new Date(checkInRecord.timestamp);
+      
+      // 1-1. 날짜가 공휴일인지 확인
+      const dateStr = `${recordDate.getFullYear()}-${String(recordDate.getMonth() + 1).padStart(2, '0')}-${String(recordDate.getDate()).padStart(2, '0')}`;
+      const isHoliday = holidayWorks.some(h => h.date === dateStr);
+      
+      // 1-2. 날짜가 휴무일인지 확인 (요일 설정 확인)
+      const dayOfWeek = recordDate.getDay(); // 0: 일요일, 1: 월요일, ...
+      const daySettings = workSettings.find(s => s.day_of_week === dayOfWeek);
+      const isNonWorkingDay = !daySettings?.is_working_day;
+      
+      // 공휴일이 아니고 휴무일도 아닌 경우에만 일반 근무시간 계산
+      if (!isHoliday && !isNonWorkingDay) {
+        const status = getAttendanceStatus(dayRecords);
+        if (status && status.workHours) {
+          regularWorkMinutes += status.workHours.totalMinutes;
+        }
+      }
+    });
+    
+    // 2. 시간외 근무시간 (공휴일 제외)
+    const overtimeMinutes = calculateMonthlyOvertimeMinutes();
+    
+    // 3 & 4. 휴일 근무시간 (8시간 이하 + 초과분)
+    const holidayWorkStats = calculateUserHolidayWorkMinutesLocal(profile.id);
+    
+    // 합산하여 총 근무시간 계산
+    return regularWorkMinutes + overtimeMinutes + holidayWorkStats.totalMinutes;
   };
 
   if (loading) {
@@ -998,6 +1025,16 @@ export const Dashboard = () => {
           <h1 className="text-lg font-bold text-gray-900">샤인치과 출결관리</h1>
           
           <div className="flex items-center space-x-4">
+            {/* 관리자인 경우 전체 직원 근무일지 버튼 표시 */}
+            {profile && profile.role === 'admin' && (
+              <button 
+                onClick={() => navigate('/employee-report')}
+                className="px-3 py-2 text-sm font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+              >
+                전체 직원 근무일지
+              </button>
+            )}
+            
             {profile && (
               <div className="flex items-center">
                 <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-sm mr-2">
@@ -1164,7 +1201,6 @@ export const Dashboard = () => {
               onClick={() => {
                 setSelectedHolidayDate('');
                 setHolidayWorkHours(8); // 기본값 8시간으로 변경
-                setHolidayWorkMinutes(480); // 8시간 = 480분
                 setHolidayDescription('');
                 setIsHolidayModalOpen(true);
               }}
@@ -1272,21 +1308,29 @@ export const Dashboard = () => {
                 : actionLoading ? '처리 중...' : '시간외근무 종료 QR 스캔하기'}
             </button>
             
-            {/* 공휴일 추가 시간외 근무시간 버튼 추가 */}
-            <button
-              onClick={() => setIsExtraOvertimeModalOpen(true)}
-              className="p-4 rounded-xl font-medium text-lg bg-red-600 text-white active:bg-red-700"
-            >
-              공휴일 추가 시간외 근무시간 입력
-            </button>
-            
-            {employeeExtraOvertime > 0 && (
-              <div className="p-3 bg-red-50 rounded-lg border border-red-200">
-                <p className="text-sm text-red-700 font-medium">
-                  추가 시간외 근무시간: {formatMinutesToHoursAndMinutes(employeeExtraOvertime)}
-                </p>
-              </div>
-            )}
+            {/* 공휴일 추가 시간외 근무시간 버튼 추가 - 당일이 공휴일인 경우에만 활성화 */}
+            {(() => {
+              // 오늘 날짜가 공휴일인지 확인
+              const today = new Date();
+              const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+              const isTodayHoliday = holidayWorks.some(h => h.date === todayStr);
+              
+              return (
+                <button
+                  onClick={() => setIsExtraOvertimeModalOpen(true)}
+                  disabled={!isTodayHoliday}
+                  className={`p-4 rounded-xl font-medium text-lg ${
+                    isTodayHoliday 
+                      ? 'bg-red-600 text-white active:bg-red-700' 
+                      : 'bg-gray-300 text-gray-600'
+                  } disabled:opacity-50`}
+                >
+                  {isTodayHoliday 
+                    ? '공휴일 추가 시간외 근무시간 입력' 
+                    : '오늘은 공휴일이 아닙니다'}
+                </button>
+              );
+            })()}
           </div>
         </div>
 
@@ -1360,16 +1404,24 @@ export const Dashboard = () => {
                             <div className="h-2 w-2 bg-red-500 rounded-full mr-2"></div>
                             <span className="text-red-700 font-medium">
                               공휴일({status.holidayWork.description}) {formatHolidayWorkTime(status.holidayWork.minutes)} 근무
+                              {status.holidayWork.extraMinutes > 0 && (
+                                <span className="ml-1">(추가 시간외: {formatMinutesToHoursAndMinutes(status.holidayWork.extraMinutes)})</span>
+                              )}
                             </span>
                           </div>
                         )}
                         
-                        {/* 총 근무시간 표시 */}
+                        {/* 총 근무시간 표시 - 시간외 근무시간 포함 */}
                         {status.workHours && (
                           <div className="flex items-center text-sm">
                             <div className="h-2 w-2 bg-blue-500 rounded-full mr-2"></div>
                             <span className="text-blue-700 font-medium">
-                              총 {status.workHours.formattedTime} 근무
+                              총 {status.totalWorkHours 
+                                ? status.totalWorkHours.formatted 
+                                : status.workHours.formattedTime} 근무
+                              {status.overtime && (
+                                <span className="ml-1 text-xs text-gray-500">(기본: {status.workHours.formattedTime})</span>
+                              )}
                             </span>
                           </div>
                         )}
@@ -1390,22 +1442,29 @@ export const Dashboard = () => {
           >
             <div className="flex items-center">
               <h2 className="text-lg font-bold text-gray-900">이번달 기록</h2>
-              <div className="flex ml-2">
+              <div className="flex ml-2 flex-wrap gap-1">
+                {/* 총 근무시간 표시 */}
+                <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
+                  총 근무시간 {formatMinutesToHoursAndMinutes(calculateTotalWorkMinutes())}
+                </span>
                 {monthlyOvertimeMinutes > 0 && (
-                  <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-medium rounded-full mr-1">
-                    시간외 총 {monthlyOvertimeFormatted}
+                  <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-medium rounded-full">
+                    시간외 {monthlyOvertimeFormatted}
                   </span>
                 )}
                 {monthlyLateMinutes > 0 && (
-                  <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-medium rounded-full mr-1">
-                    지각 총 {monthlyLateFormatted}
+                  <span className="px-2 py-1 bg-amber-100 text-amber-800 text-xs font-medium rounded-full">
+                    지각 {monthlyLateFormatted}
                   </span>
                 )}
-                {currentUserHolidayWorkMinutes > 0 && (
+                {currentUserHolidayWorkMinutes.regularMinutes > 0 && (
                   <span className="px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">
-                    공휴일 총 {currentUserHolidayWorkMinutes > 480 
-                      ? `8시간 초과 ${((currentUserHolidayWorkMinutes - 480) / 60).toFixed(1)}시간` 
-                      : `${currentUserHolidayWorkHours}시간`}
+                    휴일 {formatMinutesToHoursAndMinutes(currentUserHolidayWorkMinutes.regularMinutes)}
+                  </span>
+                )}
+                {currentUserHolidayWorkMinutes.exceededMinutes > 0 && (
+                  <span className="px-2 py-1 bg-red-200 text-red-800 text-xs font-medium rounded-full">
+                    휴일초과 {formatMinutesToHoursAndMinutes(currentUserHolidayWorkMinutes.exceededMinutes)}
                   </span>
                 )}
               </div>
@@ -1417,7 +1476,7 @@ export const Dashboard = () => {
           
           {showMonthCalendar ? (
             <div className="mt-4">
-              <AttendanceCalendar records={monthRecords} workSettings={workSettings} />
+              <AttendanceCalendar records={monthRecords} workSettings={workSettings} holidayWorks={holidayWorks} />
             </div>
           ) : (
             <p className="text-sm text-gray-600 py-2">
@@ -1673,7 +1732,6 @@ export const Dashboard = () => {
                   onChange={(e) => {
                     const hours = parseFloat(e.target.value) || 0;
                     setHolidayWorkHours(hours);
-                    setHolidayWorkMinutes(hours * 60); // 내부적으로 분 단위도 저장
                   }}
                   onFocus={(e) => e.target.select()} // 포커스시 텍스트 자동 선택
                   onClick={(e) => e.currentTarget.select()} // 클릭시 텍스트 자동 선택
@@ -1741,6 +1799,24 @@ export const Dashboard = () => {
             </div>
             
             <div className="space-y-4">
+              {/* 오늘의 공휴일 정보 표시 */}
+              {(() => {
+                const today = new Date();
+                const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                const todayHoliday = holidayWorks.find(h => h.date === todayStr);
+                
+                if (todayHoliday) {
+                  return (
+                    <div className="p-4 bg-green-50 text-green-700 rounded-lg">
+                      <p className="font-medium">오늘은 공휴일입니다: {todayHoliday.description}</p>
+                      <p className="text-sm mt-1">기본 근무시간: {formatMinutesToHoursAndMinutes(todayHoliday.work_minutes)}</p>
+                    </div>
+                  );
+                }
+                
+                return null;
+              })()}
+              
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   추가 시간외 근무시간 (분)
@@ -1748,10 +1824,17 @@ export const Dashboard = () => {
                 <input
                   type="number"
                   className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  value={extraOvertimeMinutes}
+                  value={extraOvertimeMinutes === 0 ? "" : extraOvertimeMinutes}
                   onChange={(e) => setExtraOvertimeMinutes(parseInt(e.target.value) || 0)}
                   onFocus={(e) => e.target.select()} 
-                  onClick={(e) => e.currentTarget.select()}
+                  onClick={(e) => {
+                    e.currentTarget.select();
+                    // 클릭 후 0인 경우 빈 문자열로 설정
+                    if (extraOvertimeMinutes === 0) {
+                      const inputElement = e.currentTarget as HTMLInputElement;
+                      inputElement.value = "";
+                    }
+                  }}
                   placeholder="예: 60 (60분)"
                   min="0"
                   step="10" 
@@ -1763,9 +1846,48 @@ export const Dashboard = () => {
                 )}
               </div>
               
-              <p className="text-sm text-gray-600">
-                입력한 시간은 기존 공휴일 근무 시간에 추가되어 표시됩니다.
-              </p>
+              {/* 기존 추가 시간외 근무시간 내역 표시 */}
+              {holidayWorks.length > 0 && (
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">오늘의 추가 시간외 근무 내역</h4>
+                  
+                  {(() => {
+                    // 오늘 날짜 가져오기 (YYYY-MM-DD 형식)
+                    const today = new Date();
+                    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+                    
+                    // 오늘 날짜의 공휴일 근무 기록 찾기
+                    const todayHolidayWork = holidayWorks.find(h => h.date === todayStr);
+                    
+                    if (todayHolidayWork && todayHolidayWork.extra_overtime_minutes && todayHolidayWork.extra_overtime_minutes > 0) {
+                      return (
+                        <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+                          <div>
+                            <span className="text-sm text-gray-600">현재 저장된 시간:</span>
+                            <span className="ml-2 font-medium text-blue-600">
+                              {formatMinutesToHoursAndMinutes(todayHolidayWork.extra_overtime_minutes)}
+                            </span>
+                          </div>
+                          <span className="text-xs text-gray-500">
+                            {new Date(todayHolidayWork.created_at).toLocaleTimeString()}
+                          </span>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <p className="text-sm text-gray-500">오늘 저장된 추가 시간외 근무 내역이 없습니다.</p>
+                      );
+                    }
+                  })()}
+                </div>
+              )}
+              
+              <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-100">
+                <p className="text-sm text-yellow-700">
+                  <strong>참고:</strong> 입력한 시간은 오늘 날짜의 추가 시간외 근무시간으로 저장됩니다.
+                  오늘 이미 추가 시간외 근무를 등록한 경우, 기존 값은 새로 입력한 값으로 대체됩니다.
+                </p>
+              </div>
             </div>
             
             <div className="flex space-x-3 mt-6">

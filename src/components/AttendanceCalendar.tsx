@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { AttendanceRecord, AttendanceSettings } from '../lib/supabase';
+import { AttendanceRecord, AttendanceSettings, HolidayWork } from '../lib/supabase';
 import { checkLateStatus, checkEarlyLeaveStatus, calculateWorkHours, formatMinutesToHoursAndMinutes } from '../lib/qrUtils';
 
 interface AttendanceCalendarProps {
@@ -7,6 +7,7 @@ interface AttendanceCalendarProps {
   year?: number;
   month?: number;
   workSettings?: AttendanceSettings[];
+  holidayWorks?: HolidayWork[];
 }
 
 interface DayAttendanceStatus {
@@ -20,13 +21,23 @@ interface DayAttendanceStatus {
     totalMinutes: number;
     formattedTime: string;
   };
+  totalWorkHours?: {
+    totalMinutes: number;
+    formattedTime: string;
+  };
+  isHoliday?: boolean;
+  holidayWorkMinutes?: number;
+  holidayWorkFormatted?: string;
+  isHolidayWorkExceeded?: boolean;
+  holidayDescription?: string;
 }
 
 export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ 
   records, 
   year: initialYear, 
   month: initialMonth,
-  workSettings = []
+  workSettings = [],
+  holidayWorks = []
 }) => {
   // 현재 날짜 정보 초기화
   const now = new Date();
@@ -84,6 +95,35 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
     // 비근무일(휴일) 체크
     const isNonWorkingDay = !daySetting.is_working_day;
     
+    // 공휴일 체크
+    const checkInDateStr = `${checkInDate.getFullYear()}-${String(checkInDate.getMonth() + 1).padStart(2, '0')}-${String(checkInDate.getDate()).padStart(2, '0')}`;
+    const holidayWork = holidayWorks.find(h => h.date === checkInDateStr);
+    
+    if (holidayWork) {
+      result.isHoliday = true;
+      result.holidayDescription = holidayWork.description;
+      
+      // 공휴일 근무 시간 표시 - 관리자가 입력한 work_minutes 값을 사용
+      if (holidayWork.work_minutes > 0) {
+        // 기본 근무 시간
+        let totalHolidayWorkMinutes = holidayWork.work_minutes;
+        
+        // 수동 입력된 추가 초과근무시간이 있으면 더함
+        if (holidayWork.extra_overtime_minutes && holidayWork.extra_overtime_minutes > 0) {
+          totalHolidayWorkMinutes += holidayWork.extra_overtime_minutes;
+        }
+        
+        // 공휴일 근무 시간을 별도로 저장
+        result.holidayWorkMinutes = totalHolidayWorkMinutes;
+        result.holidayWorkFormatted = formatMinutesToHoursAndMinutes(totalHolidayWorkMinutes);
+        
+        // 8시간(480분) 초과 여부 체크
+        if (totalHolidayWorkMinutes > 480) {
+          result.isHolidayWorkExceeded = true;
+        }
+      }
+    }
+    
     // 지각 확인 (근무일인 경우에만)
     if (daySetting.is_working_day) {
       const lateStatus = checkLateStatus(checkInRecord.timestamp, daySetting.work_start_time);
@@ -104,54 +144,114 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
         }
       }
       
-      // 시간외 근무 계산
-      if (isNonWorkingDay) {
-        // 비근무일(주말/휴일)인 경우 전체 시간을 시간외 근무로 계산
-        const { totalMinutes } = calculateWorkHours(
-          checkInRecord, 
-          checkOutRecord,
-          daySetting.lunch_start_time, 
-          daySetting.lunch_end_time
-        );
+      // 총 근무시간 계산
+      const workHours = calculateWorkHours(
+        checkInRecord, 
+        checkOutRecord,
+        daySetting.lunch_start_time, 
+        daySetting.lunch_end_time
+      );
+      
+      // 기본 근무시간 저장
+      result.workHours = workHours;
+      
+      // totalWorkHours 추가 - 기본적으로 workHours로 초기화
+      result.totalWorkHours = {
+        totalMinutes: workHours.totalMinutes,
+        formattedTime: workHours.formattedTime
+      };
+      
+      // 시간외 근무 계산 (공휴일이 아닌 경우에만)
+      if (!result.isHoliday) {
+        // 시간외 근무 종료 기록이 있는지 확인
+        const overtimeEndRecord = dayRecords.find(r => r.record_type === 'overtime_end');
         
-        result.overtimeMinutes = totalMinutes;
-        result.overtimeFormatted = formatMinutesToHoursAndMinutes(totalMinutes);
-      } else {
-        // 근무일인 경우 정규 근무시간 외 시간만 계산
-        const checkInTime = new Date(checkInRecord.timestamp);
-        const checkOutTime = new Date(checkOutRecord.timestamp);
-        
-        // 설정된 근무 시작/종료 시간
-        const today = new Date(checkInTime);
-        today.setHours(0, 0, 0, 0);
-        
-        // 근무 시작 시간 설정
-        const [workStartHour, workStartMinute] = daySetting.work_start_time.split(':').map(Number);
-        const workStartTime = new Date(today);
-        workStartTime.setHours(workStartHour, workStartMinute, 0, 0);
-        
-        // 근무 종료 시간 설정
-        const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
-        const workEndTime = new Date(today);
-        workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
-        
-        let overtimeMinutes = 0;
-        
-        // 일찍 출근한 경우 (정규 출근 시간 전)
-        if (checkInTime < workStartTime) {
-          const earlyMinutes = Math.floor((workStartTime.getTime() - checkInTime.getTime()) / (1000 * 60));
-          overtimeMinutes += earlyMinutes;
-        }
-        
-        // 늦게 퇴근한 경우 (정규 퇴근 시간 후)
-        if (checkOutTime > workEndTime) {
-          const lateMinutes = Math.floor((checkOutTime.getTime() - workEndTime.getTime()) / (1000 * 60));
-          overtimeMinutes += lateMinutes;
-        }
-        
-        if (overtimeMinutes > 0) {
-          result.overtimeMinutes = overtimeMinutes;
-          result.overtimeFormatted = formatMinutesToHoursAndMinutes(overtimeMinutes);
+        if (overtimeEndRecord) {
+          if (isNonWorkingDay) {
+            // 비근무일(주말/휴일)인 경우 전체 시간을 시간외 근무로 계산
+            const { totalMinutes } = calculateWorkHours(
+              checkInRecord, 
+              overtimeEndRecord,
+              daySetting.lunch_start_time, 
+              daySetting.lunch_end_time
+            );
+            
+            result.overtimeMinutes = totalMinutes;
+            result.overtimeFormatted = formatMinutesToHoursAndMinutes(totalMinutes);
+            
+            // 비근무일인 경우 totalWorkHours는 시간외 근무시간과 동일
+            if (result.totalWorkHours) {
+              result.totalWorkHours = {
+                totalMinutes: totalMinutes,
+                formattedTime: formatMinutesToHoursAndMinutes(totalMinutes)
+              };
+            }
+          } else {
+            // 근무일인 경우 정규 근무시간 외 시간만 계산
+            const checkInTime = new Date(checkInRecord.timestamp);
+            const overtimeEndTime = new Date(overtimeEndRecord.timestamp);
+            
+            // 설정된 근무 시작/종료 시간
+            const today = new Date(checkInTime);
+            today.setHours(0, 0, 0, 0);
+            
+            // 근무 시작 시간 설정
+            const [workStartHour, workStartMinute] = daySetting.work_start_time.split(':').map(Number);
+            const workStartTime = new Date(today);
+            workStartTime.setHours(workStartHour, workStartMinute, 0, 0);
+            
+            // 근무 종료 시간 설정
+            const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
+            const workEndTime = new Date(today);
+            workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
+            
+            let overtimeMinutes = 0;
+            
+            // 시간외 근무 종료 기록이 있고, 정규 퇴근 시간 이후인 경우만 시간외 근무로 계산
+            if (overtimeEndTime > workEndTime) {
+              // 정규 퇴근 시간 이후부터 시간외 근무 종료 시간까지 계산
+              const lateMinutes = Math.floor((overtimeEndTime.getTime() - workEndTime.getTime()) / (1000 * 60));
+              overtimeMinutes += lateMinutes;
+            }
+            
+            // 점심시간 동안 시간외 근무 추가
+            const hasNoLunchTime = daySetting.lunch_start_time === "00:00" && daySetting.lunch_end_time === "00:00";
+            if (!hasNoLunchTime) {
+              // 점심 시작 시간 설정
+              const [lunchStartHour, lunchStartMinute] = daySetting.lunch_start_time.split(':').map(Number);
+              const lunchStartTime = new Date(today);
+              lunchStartTime.setHours(lunchStartHour, lunchStartMinute, 0, 0);
+              
+              // 점심 종료 시간 설정
+              const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
+              const lunchEndTime = new Date(today);
+              lunchEndTime.setHours(lunchEndHour, lunchEndMinute, 0, 0);
+              
+              // 시간외 근무 종료 시간이 점심시간 내인지 확인
+              const isOvertimeEndDuringLunch = 
+                overtimeEndTime >= lunchStartTime && overtimeEndTime <= lunchEndTime;
+                
+              // 점심시간에 시간외 근무 종료를 찍은 경우
+              if (isOvertimeEndDuringLunch) {
+                // 점심 시작 시간부터 시간외 근무 종료 시간까지만 계산 (실제 근무한 시간)
+                const lunchWorkMinutes = Math.floor((overtimeEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60));
+                overtimeMinutes += lunchWorkMinutes;
+              }
+            }
+            
+            if (overtimeMinutes > 0) {
+              result.overtimeMinutes = overtimeMinutes;
+              result.overtimeFormatted = formatMinutesToHoursAndMinutes(overtimeMinutes);
+              
+              // 총 근무시간에 시간외 근무시간 포함
+              if (result.workHours && result.totalWorkHours) {
+                result.totalWorkHours = {
+                  totalMinutes: result.workHours.totalMinutes + overtimeMinutes,
+                  formattedTime: formatMinutesToHoursAndMinutes(result.workHours.totalMinutes + overtimeMinutes)
+                };
+              }
+            }
+          }
         }
       }
     }
@@ -230,21 +330,7 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
     }
     
     return days;
-  }, [currentYear, currentMonth, records, workSettings]);
-
-  // 출결 타입에 따른 배지 색상
-  const getRecordTypeBadge = (type: string) => {
-    switch (type) {
-      case 'check_in':
-        return <span className="w-2 h-2 rounded-full bg-blue-500"></span>;
-      case 'check_out':
-        return <span className="w-2 h-2 rounded-full bg-amber-500"></span>;
-      case 'overtime_end':
-        return <span className="w-2 h-2 rounded-full bg-purple-500"></span>;
-      default:
-        return null;
-    }
-  };
+  }, [currentYear, currentMonth, records, workSettings, holidayWorks]);
 
   // 오늘 날짜인지 확인
   const isToday = (date: number | null) => {
@@ -298,8 +384,12 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
           week.map((day, dayIndex) => (
             <div 
               key={`${weekIndex}-${dayIndex}`}
-              className={`p-1 min-h-16 sm:min-h-20 border border-gray-100 ${
-                day.date ? 'bg-white' : 'bg-gray-50'
+              className={`p-0.5 min-h-16 sm:min-h-20 border border-gray-100 ${
+                day.date 
+                  ? day.status?.isHoliday 
+                    ? 'bg-red-50' // 공휴일인 경우 연한 빨간색 배경
+                    : 'bg-white' 
+                  : 'bg-gray-50'
               } ${
                 isToday(day.date) ? 'ring-2 ring-blue-500' : ''
               } rounded-md overflow-hidden`}
@@ -307,9 +397,20 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
               {day.date && (
                 <>
                   <div className={`text-xs font-medium mb-1 ${
-                    dayIndex === 0 ? 'text-red-500' : dayIndex === 6 ? 'text-blue-500' : 'text-gray-700'
+                    day.status?.isHoliday
+                      ? 'text-red-600 font-bold' // 공휴일인 경우 빨간색 글씨와 볼드체
+                      : dayIndex === 0 
+                        ? 'text-red-500' 
+                        : dayIndex === 6 
+                          ? 'text-blue-500' 
+                          : 'text-gray-700'
                   }`}>
                     {day.date}
+                    {day.status?.isHoliday && (
+                      <span className="ml-1 text-[8px] text-red-500">
+                        ({day.status.holidayDescription})
+                      </span>
+                    )}
                   </div>
                   
                   {/* 근무 상태 정보 */}
@@ -336,11 +437,24 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
                       )}
                       
                       {/* 시간외 근무 정보 */}
-                      {day.status.overtimeMinutes && day.status.overtimeMinutes > 0 && day.status.overtimeFormatted && (
+                      {day.records.some(r => r.record_type === 'overtime_end') && day.status?.overtimeMinutes && day.status?.overtimeMinutes > 0 && day.status?.overtimeFormatted && (
                         <div className="flex items-center">
                           <div className="h-2 w-2 bg-purple-500 rounded-full mr-1"></div>
                           <span className="text-[9px] sm:text-[10px] text-purple-700 font-medium">
                             시간외 {day.status.overtimeFormatted}
+                          </span>
+                        </div>
+                      )}
+                      
+                      {/* 공휴일 근무 정보 */}
+                      {day.status?.isHoliday && day.status?.holidayWorkMinutes && day.status?.holidayWorkMinutes > 0 && (
+                        <div className="flex items-center">
+                          <div className="h-2 w-2 bg-red-500 rounded-full mr-1"></div>
+                          <span className="text-[9px] sm:text-[10px] text-red-700 font-medium">
+                            {day.status?.holidayWorkMinutes > 480 
+                              ? <>공휴일 8시간<span className="text-purple-700 font-bold">(초과 {formatMinutesToHoursAndMinutes(day.status.holidayWorkMinutes - 480)})</span></>
+                              : `공휴일 ${day.status.holidayWorkFormatted}`
+                            }
                           </span>
                         </div>
                       )}
@@ -369,6 +483,10 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
         <div className="flex items-center space-x-1">
           <span className="w-2 h-2 rounded-full bg-purple-500"></span>
           <span>시간외 근무</span>
+        </div>
+        <div className="flex items-center space-x-1">
+          <span className="w-2 h-2 rounded-full bg-red-500"></span>
+          <span>공휴일 근무</span>
         </div>
       </div>
     </div>
