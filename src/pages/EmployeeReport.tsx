@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase, fetchProfile, getMonthAttendance, getHolidayWorks, getWorkSettings, type Profile, type AttendanceRecord, type HolidayWork, type AttendanceSettings } from '../lib/supabase';
-import { formatMinutesToHoursAndMinutes, calculateWorkHours } from '../lib/qrUtils';
+import { formatMinutesToHoursAndMinutes, calculateTotalWorkMinutes, calculateMonthlyOvertimeMinutes, calculateUserHolidayWorkMinutes } from '../lib/qrUtils';
 import * as XLSX from 'xlsx';
 
 interface EmployeeStats {
@@ -208,89 +208,6 @@ export const EmployeeReport = () => {
     loadAttendanceData();
   }, [employees, selectedYear, selectedMonth]);
   
-  // 근무 상태 계산 함수 (Dashboard의 getAttendanceStatus 함수와 유사하게 구현)
-  const getEmployeeAttendanceStatus = (records: AttendanceRecord[], settings: AttendanceSettings[]) => {
-    if (!settings || settings.length === 0) return null;
-    
-    const checkInRecord = records.find(r => r.record_type === 'check_in');
-    const checkOutRecord = records.find(r => r.record_type === 'check_out');
-    const overtimeEndRecord = records.find(r => r.record_type === 'overtime_end');
-    
-    if (!checkInRecord) return null;
-    
-    // 출근 날짜의 요일 확인
-    const checkInDate = new Date(checkInRecord.timestamp);
-    const dayOfWeek = checkInDate.getDay();
-    
-    // 해당 요일의 근무시간 설정 가져오기
-    const daySetting = settings.find(s => s.day_of_week === dayOfWeek);
-    
-    if (!daySetting) return null;
-    
-    let result: any = {};
-    
-    // 비근무일(휴일) 체크
-    const isNonWorkingDay = !daySetting.is_working_day;
-    
-    // 퇴근 또는 시간외 근무 종료 기록이 있는 경우
-    const lastRecord = checkOutRecord || overtimeEndRecord;
-    
-    if (lastRecord) {
-      // 총 근무시간 계산
-      const workHours = calculateWorkHours(
-        checkInRecord, 
-        lastRecord, 
-        daySetting.lunch_start_time, 
-        daySetting.lunch_end_time
-      );
-      
-      result.workHours = workHours;
-      
-      // 시간외 근무 계산 - 시간외 근무 종료를 찍은 경우에만 계산
-      if (overtimeEndRecord) {
-        // 시간외 근무 종료 기록이 있는 경우
-        if (isNonWorkingDay) {
-          // 비근무일인 경우 전체 시간을 시간외 근무로 계산
-          result.overtime = {
-            minutes: workHours.totalMinutes,
-            formatted: workHours.formattedTime
-          };
-        } else {
-          // 근무일인 경우, 정규 근무시간을 제외한 시간만 계산
-          const checkInTime = new Date(checkInRecord.timestamp);
-          const overtimeEndTime = new Date(overtimeEndRecord.timestamp);
-          
-          // 설정된 근무 시작/종료 시간
-          const today = new Date(checkInTime);
-          today.setHours(0, 0, 0, 0);
-          
-          // 근무 종료 시간 설정
-          const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
-          const workEndTime = new Date(today);
-          workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
-          
-          let overtimeMinutes = 0;
-          
-          // 시간외 근무 종료 기록이 있고, 정규 퇴근 시간 이후인 경우만 시간외 근무로 계산
-          if (overtimeEndTime > workEndTime) {
-            // 정규 퇴근 시간 이후부터 시간외 근무 종료 시간까지 계산
-            const lateMinutes = Math.floor((overtimeEndTime.getTime() - workEndTime.getTime()) / (1000 * 60));
-            overtimeMinutes += lateMinutes;
-          }
-          
-          if (overtimeMinutes > 0) {
-            result.overtime = {
-              minutes: overtimeMinutes,
-              formatted: formatMinutesToHoursAndMinutes(overtimeMinutes)
-            };
-          }
-        }
-      }
-    }
-    
-    return result;
-  };
-  
   // 직원별 통계 계산
   useEffect(() => {
     if (employees.length === 0 || Object.keys(attendanceRecords).length === 0 || workSettings.length === 0) return;
@@ -307,107 +224,11 @@ export const EmployeeReport = () => {
     const stats: EmployeeStats[] = employees.map(employee => {
       const records = attendanceRecords[employee.id] || [];
       
-      // 일별 출결 기록 그룹화
-      const recordsByDate: Record<string, AttendanceRecord[]> = {};
-      
-      records.forEach(record => {
-        const recordDate = new Date(record.timestamp);
-        const dateKey = `${recordDate.getFullYear()}-${recordDate.getMonth()}-${recordDate.getDate()}`;
-        
-        if (!recordsByDate[dateKey]) {
-          recordsByDate[dateKey] = [];
-        }
-        
-        recordsByDate[dateKey].push(record);
-      });
-      
-      // 1. 시간외 근무시간 계산 (공휴일 제외)
-      let overtimeMinutes = 0;
-      
-      Object.values(recordsByDate).forEach(dayRecords => {
-        // 해당 날짜에 시간외 근무 종료 기록이 있는 경우에만 계산
-        if (dayRecords.some(r => r.record_type === 'overtime_end')) {
-          const checkInRecord = dayRecords.find(r => r.record_type === 'check_in');
-          if (!checkInRecord) return;
-          
-          // 날짜가 공휴일인지 확인
-          const recordDate = new Date(checkInRecord.timestamp);
-          const dateStr = `${recordDate.getFullYear()}-${String(recordDate.getMonth() + 1).padStart(2, '0')}-${String(recordDate.getDate()).padStart(2, '0')}`;
-          const isHoliday = holidayWorks.some(h => h.date === dateStr);
-          
-          // 공휴일이 아닌 경우에만 시간외 근무 시간 합산
-          if (!isHoliday) {
-            const status = getEmployeeAttendanceStatus(dayRecords, workSettings);
-            if (status && status.overtime) {
-              overtimeMinutes += status.overtime.minutes;
-            }
-          }
-        }
-      });
-      
-      // 2 & 3. 휴일 근무시간 및 초과시간 계산
-      const standardMinutes = 480; // 8시간 = 480분
-      let holidayWorkMinutes = 0; // 8시간 이하 근무 합계
-      let holidayExceededMinutes = 0; // 8시간 초과분 합계
-      
-      // 직원의 출근 기록이 있는 날짜만 추출
-      const userCheckInDates = records
-        .filter(record => record.record_type === 'check_in')
-        .map(record => {
-          const date = new Date(record.timestamp);
-          return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        });
-      
-      // 공휴일 중 사용자가 출근한 날짜에 대한 근무 시간 계산
-      holidayWorks.forEach(holiday => {
-        if (userCheckInDates.includes(holiday.date)) {
-          let minutes = holiday.work_minutes || 0;
-          
-          // 추가 시간외 근무시간이 있으면 더함
-          if (holiday.extra_overtime_minutes) {
-            minutes += holiday.extra_overtime_minutes;
-          }
-          
-          // 8시간(480분) 기준으로 나누어 계산
-          if (minutes <= standardMinutes) {
-            holidayWorkMinutes += minutes;
-          } else {
-            holidayWorkMinutes += standardMinutes;
-            holidayExceededMinutes += (minutes - standardMinutes);
-          }
-        }
-      });
-      
-      // 4. 총 근무시간 계산 (공휴일 및 휴무일 제외 일반 근무 + 시간외 + 휴일 근무 합계)
-      let regularWorkMinutes = 0;
-      
-      // 각 날짜별 일반 근무시간 계산 (공휴일 및 휴무일 제외)
-      Object.values(recordsByDate).forEach(dayRecords => {
-        const checkInRecord = dayRecords.find(r => r.record_type === 'check_in');
-        if (!checkInRecord) return;
-        
-        const checkInTime = new Date(checkInRecord.timestamp);
-        
-        // 해당 날짜가 공휴일인지 확인
-        const checkInDateStr = `${checkInTime.getFullYear()}-${String(checkInTime.getMonth() + 1).padStart(2, '0')}-${String(checkInTime.getDate()).padStart(2, '0')}`;
-        const isHoliday = holidayWorks.some(h => h.date === checkInDateStr);
-        
-        // 해당 날짜가 휴무일인지 확인
-        const dayOfWeek = checkInTime.getDay(); // 0: 일요일, 1: 월요일, ...
-        const daySettings = workSettings.find(s => s.day_of_week === dayOfWeek);
-        const isNonWorkingDay = !daySettings?.is_working_day;
-        
-        // 공휴일이 아니고 휴무일도 아닌 경우에만 추가 (공휴일과 휴무일 근무는 별도로 계산됨)
-        if (!isHoliday && !isNonWorkingDay) {
-          const status = getEmployeeAttendanceStatus(dayRecords, workSettings);
-          if (status && status.workHours) {
-            regularWorkMinutes += status.workHours.totalMinutes;
-          }
-        }
-      });
-
-      // 총 근무시간 = 일반 근무시간 + 시간외 근무시간 + 휴일 근무시간(정규+초과)
-      const totalWorkMinutes = regularWorkMinutes + overtimeMinutes + holidayWorkMinutes + holidayExceededMinutes;
+      // 각 직원의 출결 기록 계산
+      // 이미 구현된 유틸리티 함수를 사용하여 계산
+      const overtimeMinutes = calculateMonthlyOvertimeMinutes(records, holidayWorks, workSettings);
+      const holidayWorkStats = calculateUserHolidayWorkMinutes(employee.id, records, holidayWorks);
+      const totalWorkMinutes = calculateTotalWorkMinutes(records, holidayWorks, workSettings, employee.id);
       
       return {
         id: employee.id,
@@ -416,10 +237,10 @@ export const EmployeeReport = () => {
         totalWorkFormatted: formatMinutesToHoursAndMinutes(totalWorkMinutes),
         overtimeMinutes,
         overtimeFormatted: formatMinutesToHoursAndMinutes(overtimeMinutes),
-        holidayWorkMinutes,
-        holidayWorkFormatted: formatMinutesToHoursAndMinutes(holidayWorkMinutes),
-        holidayExceededMinutes,
-        holidayExceededFormatted: formatMinutesToHoursAndMinutes(holidayExceededMinutes)
+        holidayWorkMinutes: holidayWorkStats.regularMinutes,
+        holidayWorkFormatted: formatMinutesToHoursAndMinutes(holidayWorkStats.regularMinutes),
+        holidayExceededMinutes: holidayWorkStats.exceededMinutes,
+        holidayExceededFormatted: formatMinutesToHoursAndMinutes(holidayWorkStats.exceededMinutes)
       };
     });
     
