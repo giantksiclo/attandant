@@ -1,7 +1,25 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, fetchProfile, getMonthAttendance, getHolidayWorks, getWorkSettings, type Profile, type AttendanceRecord, type HolidayWork, type AttendanceSettings } from '../lib/supabase';
-import { formatMinutesToHoursAndMinutes, calculateTotalWorkMinutes, calculateMonthlyOvertimeMinutes, calculateUserHolidayWorkMinutes } from '../lib/qrUtils';
+import { 
+  supabase, 
+  fetchProfile, 
+  getMonthAttendance, 
+  getHolidayWorks, 
+  getWorkSettings, 
+  type Profile, 
+  type AttendanceRecord, 
+  type HolidayWork, 
+  type AttendanceSettings 
+} from '../lib/supabase';
+import { 
+  formatMinutesToTimeOnly,
+  formatMinutesOnly,
+  calculateMonthlyOvertimeMinutes,
+  calculateHolidayWorkMinutes,
+  calculateWorkHours,
+  calculateOvertimeMinutes,
+  checkLateStatus
+} from '../lib/timeCalculationUtils';
 import * as XLSX from 'xlsx';
 
 interface EmployeeStats {
@@ -15,9 +33,11 @@ interface EmployeeStats {
   holidayWorkFormatted: string;
   holidayExceededMinutes: number;
   holidayExceededFormatted: string;
+  lateMinutes: number;
+  lateFormatted: string;
 }
 
-type SortField = 'name' | 'totalWorkMinutes' | 'overtimeMinutes' | 'holidayWorkMinutes' | 'holidayExceededMinutes';
+type SortField = 'name' | 'totalWorkMinutes' | 'overtimeMinutes' | 'holidayWorkMinutes' | 'holidayExceededMinutes' | 'lateMinutes';
 type SortDirection = 'asc' | 'desc';
 
 export const EmployeeReport = () => {
@@ -225,22 +245,99 @@ export const EmployeeReport = () => {
       const records = attendanceRecords[employee.id] || [];
       
       // 각 직원의 출결 기록 계산
-      // 이미 구현된 유틸리티 함수를 사용하여 계산
-      const overtimeMinutes = calculateMonthlyOvertimeMinutes(records, holidayWorks, workSettings);
-      const holidayWorkStats = calculateUserHolidayWorkMinutes(employee.id, records, holidayWorks);
-      const totalWorkMinutes = calculateTotalWorkMinutes(records, holidayWorks, workSettings, employee.id);
+      const overtimeMinutes = calculateMonthlyOvertimeMinutes(records, holidayWorks.map(h => h.date), workSettings);
+      const holidayWorkStats = calculateHolidayWorkMinutes(employee.id, records, holidayWorks);
+      
+      // 대시보드와 동일한 방식으로 총 근무시간 계산
+      let totalWorkMinutes = 0;
+      
+      // 지각 시간 계산을 위한 변수
+      let totalLateMinutes = 0;
+      
+      // 날짜별로 기록 그룹화
+      const recordsByDate = records.reduce((acc, record) => {
+        const date = new Date(record.timestamp);
+        const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        
+        if (!acc[dateKey]) {
+          acc[dateKey] = [];
+        }
+        
+        acc[dateKey].push(record);
+        return acc;
+      }, {} as Record<string, AttendanceRecord[]>);
+      
+      // 날짜별 총 근무시간 및 지각시간 합산
+      Object.entries(recordsByDate).forEach(([dateStr, dayRecords]) => {
+        // 출근 및 퇴근(or 마지막 활동) 기록 확인
+        const checkInRecord = dayRecords.find(r => r.record_type === 'check_in');
+        if (!checkInRecord) return;
+        
+        // 퇴근 또는 마지막 활동 기록 찾기
+        const lastRecord = dayRecords
+          .filter(r => r.record_type === 'check_out' || r.record_type === 'overtime_end')
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+        
+        if (!lastRecord) return;
+        
+        // 날짜가 공휴일인지 확인
+        const isHoliday = holidayWorks.some(h => h.date === dateStr);
+        
+        // 날짜의 요일 설정 확인
+        const checkInDate = new Date(checkInRecord.timestamp);
+        const dayOfWeek = checkInDate.getDay();
+        const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek) || workSettings[0];
+        
+        // 지각 확인 (공휴일이 아니고 근무일인 경우에만)
+        if (!isHoliday && daySetting.is_working_day) {
+          const { isLate, minutesLate } = checkLateStatus(checkInRecord.timestamp, daySetting.work_start_time);
+          if (isLate) {
+            totalLateMinutes += minutesLate;
+          }
+        }
+        
+        // 공휴일이면 근무시간 계산 건너뛰기
+        if (isHoliday) return;
+        
+        // 일별 총 근무시간 계산 (출근에서 퇴근/마지막 활동까지, 점심시간 제외)
+        const dailyWorkHours = calculateWorkHours(
+          checkInRecord, 
+          lastRecord, 
+          daySetting.lunch_start_time, 
+          daySetting.lunch_end_time
+        );
+        
+        // 점심시간 중 시간외 근무 계산
+        let lunchOvertimeMinutes = 0;
+        const hasOvertimeEnd = dayRecords.some(r => r.record_type === 'overtime_end');
+        
+        if (hasOvertimeEnd) {
+          const isNonWorkingDay = !daySetting.is_working_day;
+          const overtimeResult = calculateOvertimeMinutes(dayRecords, daySetting, isNonWorkingDay);
+          lunchOvertimeMinutes = overtimeResult.lunchOvertimeMinutes;
+        }
+        
+        // 총 근무시간 = 기본 근무시간 + 점심시간 중 시간외 근무시간
+        totalWorkMinutes += dailyWorkHours.totalMinutes + lunchOvertimeMinutes;
+      });
+      
+      // 2. 공휴일 근무시간 합산 (사용자의 출근 기록이 있는 공휴일)
+      // 공휴일 근무시간 합산 (8시간 이하 + 8시간 초과 + 공휴일 추가 시간외)
+      totalWorkMinutes += holidayWorkStats.regularMinutes + holidayWorkStats.exceededMinutes + holidayWorkStats.extraMinutes;
       
       return {
         id: employee.id,
         name: employee.name || '이름 없음',
-        totalWorkMinutes,
-        totalWorkFormatted: formatMinutesToHoursAndMinutes(totalWorkMinutes),
+        totalWorkMinutes: totalWorkMinutes,
+        totalWorkFormatted: formatMinutesToTimeOnly(totalWorkMinutes),
         overtimeMinutes,
-        overtimeFormatted: formatMinutesToHoursAndMinutes(overtimeMinutes),
+        overtimeFormatted: formatMinutesOnly(overtimeMinutes),
         holidayWorkMinutes: holidayWorkStats.regularMinutes,
-        holidayWorkFormatted: formatMinutesToHoursAndMinutes(holidayWorkStats.regularMinutes),
+        holidayWorkFormatted: formatMinutesOnly(holidayWorkStats.regularMinutes),
         holidayExceededMinutes: holidayWorkStats.exceededMinutes,
-        holidayExceededFormatted: formatMinutesToHoursAndMinutes(holidayWorkStats.exceededMinutes)
+        holidayExceededFormatted: formatMinutesOnly(holidayWorkStats.exceededMinutes),
+        lateMinutes: totalLateMinutes,
+        lateFormatted: formatMinutesOnly(totalLateMinutes)
       };
     });
     
@@ -409,7 +506,8 @@ export const EmployeeReport = () => {
         '총 근무시간': stat.totalWorkFormatted,
         '시간외 근무': stat.overtimeFormatted,
         '휴일 근무': stat.holidayWorkFormatted,
-        '휴일 8시간 초과': stat.holidayExceededFormatted
+        '휴일 8시간 초과': stat.holidayExceededFormatted,
+        '지각시간': stat.lateFormatted
       };
     });
     
@@ -423,7 +521,8 @@ export const EmployeeReport = () => {
       { wch: 15 }, // 총 근무시간 컬럼 폭
       { wch: 15 }, // 시간외 근무 컬럼 폭
       { wch: 15 }, // 휴일 근무 컬럼 폭
-      { wch: 15 }  // 휴일 8시간 초과 컬럼 폭
+      { wch: 15 }, // 휴일 8시간 초과 컬럼 폭
+      { wch: 15 }  // 지각시간 컬럼 폭
     ];
     worksheet['!cols'] = wscols;
     
@@ -585,6 +684,13 @@ export const EmployeeReport = () => {
                       >
                         휴일 8시간 초과 {renderSortIndicator('holidayExceededMinutes')}
                       </th>
+                      <th 
+                        className="px-4 py-2 text-right text-sm font-medium text-gray-500 border-b cursor-pointer whitespace-nowrap"
+                        onClick={() => handleSort('lateMinutes')}
+                        style={{width: "10%"}}
+                      >
+                        지각시간 {renderSortIndicator('lateMinutes')}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -595,6 +701,7 @@ export const EmployeeReport = () => {
                         <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.overtimeFormatted}</td>
                         <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.holidayWorkFormatted}</td>
                         <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.holidayExceededFormatted}</td>
+                        <td className="px-4 py-3 text-sm text-gray-900 text-right border-b">{stat.lateFormatted}</td>
                       </tr>
                     ))}
                     
@@ -602,16 +709,19 @@ export const EmployeeReport = () => {
                     <tr className="bg-gray-50">
                       <td className="px-4 py-3 text-sm font-bold text-gray-900">전체 합계</td>
                       <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
-                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.totalWorkMinutes, 0))}
+                        {formatMinutesToTimeOnly(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.totalWorkMinutes, 0))}
                       </td>
                       <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
-                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.overtimeMinutes, 0))}
+                        {formatMinutesOnly(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.overtimeMinutes, 0))}
                       </td>
                       <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
-                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.holidayWorkMinutes, 0))}
+                        {formatMinutesOnly(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.holidayWorkMinutes, 0))}
                       </td>
                       <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
-                        {formatMinutesToHoursAndMinutes(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.holidayExceededMinutes, 0))}
+                        {formatMinutesOnly(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.holidayExceededMinutes, 0))}
+                      </td>
+                      <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right">
+                        {formatMinutesOnly(filteredAndSortedEmployeeStats.reduce((sum, stat) => sum + stat.lateMinutes, 0))}
                       </td>
                     </tr>
                   </tbody>

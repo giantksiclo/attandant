@@ -564,4 +564,23 @@ export const getAttendanceStatusForUtils = (records: AttendanceRecord[], workSet
   }
   
   return result;
+};
+
+export const formatQRDataWithTimestamp = (userId: string, type: string, location?: string) => {
+  const timestamp = new Date().toISOString();
+  return JSON.stringify({ userId, type, timestamp, location });
+};
+
+export const generateQRCode = async (_: string): Promise<string> => {
+  // QR 코드 생성 로직 (실제 구현은 프로젝트에 맞게 조정)
+  return "data:image/png;base64,..."; // 더미 QR 코드 데이터
+};
+
+export const showQRCode = (qrCodeData: string, element: HTMLElement) => {
+  if (element) {
+    const img = document.createElement('img');
+    img.src = qrCodeData;
+    element.innerHTML = '';
+    element.appendChild(img);
+  }
 }; 

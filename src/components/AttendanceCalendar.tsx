@@ -1,6 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { AttendanceRecord, AttendanceSettings, HolidayWork } from '../lib/supabase';
-import { checkLateStatus, checkEarlyLeaveStatus, calculateWorkHours, formatMinutesToHoursAndMinutes } from '../lib/qrUtils';
+import { type AttendanceRecord, type AttendanceSettings, type HolidayWork } from '../lib/supabase';
+import { 
+  formatMinutesToHoursAndMinutes, 
+  calculateWorkHours, 
+  checkLateStatus,
+  checkEarlyLeaveStatus,
+  calculateOvertimeMinutes
+} from '../lib/timeCalculationUtils';
 
 interface AttendanceCalendarProps {
   records: AttendanceRecord[];
@@ -30,6 +36,10 @@ interface DayAttendanceStatus {
   holidayWorkFormatted?: string;
   isHolidayWorkExceeded?: boolean;
   holidayDescription?: string;
+  overtime?: {
+    minutes: number;
+    formatted: string;
+  };
 }
 
 export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ 
@@ -164,107 +174,29 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
       // 시간외 근무 계산 (공휴일이 아닌 경우에만)
       if (!result.isHoliday) {
         // 시간외 근무 종료 기록이 있는지 확인 - 모든 시간외 근무 종료 기록을 찾음
-        const overtimeEndRecords = dayRecords.filter(r => r.record_type === 'overtime_end')
-          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const overtimeEndRecords = dayRecords.filter(r => r.record_type === 'overtime_end');
         
         if (overtimeEndRecords.length > 0) {
-          let totalOvertimeMinutes = 0;
+          // 통합된 시간외 근무 계산 함수 사용
+          const overtimeResult = calculateOvertimeMinutes(dayRecords, daySetting, isNonWorkingDay);
           
-          if (isNonWorkingDay) {
-            // 비근무일(주말/휴일)인 경우 전체 시간을 시간외 근무로 계산
-            // 마지막 시간외 근무 종료 기록 사용
-            const lastOvertimeEndRecord = overtimeEndRecords[overtimeEndRecords.length - 1];
-            const { totalMinutes } = calculateWorkHours(
-              checkInRecord, 
-              lastOvertimeEndRecord,
-              daySetting.lunch_start_time, 
-              daySetting.lunch_end_time
-            );
+          // 반환값 타입 변경: totalMinutes 속성 사용
+          if (overtimeResult.totalMinutes > 0) {
+            result.overtime = {
+              minutes: overtimeResult.totalMinutes,
+              formatted: formatMinutesToHoursAndMinutes(overtimeResult.totalMinutes)
+            };
             
-            totalOvertimeMinutes = totalMinutes;
-          } else {
-            // 근무일인 경우 정규 근무시간 외 시간만 계산
-            const checkInTime = new Date(checkInRecord.timestamp);
+            // 근무일이 아닌 경우, 전체 근무시간이 시간외 근무로 계산되므로 
+            // 별도로 표시할 필요 없음
             
-            // 설정된 근무 시작/종료 시간
-            const today = new Date(checkInTime);
-            today.setHours(0, 0, 0, 0);
-            
-            // 근무 시작 시간 설정
-            const [workStartHour, workStartMinute] = daySetting.work_start_time.split(':').map(Number);
-            const workStartTime = new Date(today);
-            workStartTime.setHours(workStartHour, workStartMinute, 0, 0);
-            
-            // 근무 종료 시간 설정
-            const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
-            const workEndTime = new Date(today);
-            workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
-            
-            // 점심시간 관련 설정
-            const hasNoLunchTime = daySetting.lunch_start_time === "00:00" && daySetting.lunch_end_time === "00:00";
-            let lunchStartTime: Date | null = null;
-            let lunchEndTime: Date | null = null;
-            
-            if (!hasNoLunchTime) {
-              // 점심 시작 시간 설정
-              const [lunchStartHour, lunchStartMinute] = daySetting.lunch_start_time.split(':').map(Number);
-              lunchStartTime = new Date(today);
-              lunchStartTime.setHours(lunchStartHour, lunchStartMinute, 0, 0);
-              
-              // 점심 종료 시간 설정
-              const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
-              lunchEndTime = new Date(today);
-              lunchEndTime.setHours(lunchEndHour, lunchEndMinute, 0, 0);
-            }
-            
-            // 각 시간외 근무 종료 기록에 대해 계산
-            overtimeEndRecords.forEach(overtimeEndRecord => {
-              const overtimeEndTime = new Date(overtimeEndRecord.timestamp);
-              let recordOvertimeMinutes = 0;
-              
-              // 시간외 근무 종료 기록이 있고, 정규 퇴근 시간 이후인 경우만 시간외 근무로 계산
-              if (overtimeEndTime > workEndTime) {
-                // 정규 퇴근 시간 이후부터 시간외 근무 종료 시간까지 계산
-                const lateMinutes = Math.floor((overtimeEndTime.getTime() - workEndTime.getTime()) / (1000 * 60));
-                recordOvertimeMinutes += lateMinutes;
-              }
-              
-              // 점심시간 동안 시간외 근무 추가
-              if (!hasNoLunchTime && lunchStartTime && lunchEndTime) {
-                // 시간외 근무 종료 시간이 점심시간 내인지 확인
-                const isOvertimeEndDuringLunch = 
-                  overtimeEndTime >= lunchStartTime && overtimeEndTime <= lunchEndTime;
-                  
-                // 점심시간에 시간외 근무 종료를 찍은 경우
-                if (isOvertimeEndDuringLunch) {
-                  // 점심 시작 시간부터 시간외 근무 종료 시간까지만 계산 (실제 근무한 시간)
-                  const lunchWorkMinutes = Math.floor((overtimeEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60));
-                  recordOvertimeMinutes += lunchWorkMinutes;
-                }
-              }
-              
-              // 오전 근무 시작 전 시간외 근무 계산 (드문 경우)
-              if (overtimeEndTime <= workStartTime) {
-                const earlyMinutes = Math.floor((overtimeEndTime.getTime() - checkInTime.getTime()) / (1000 * 60));
-                if (earlyMinutes > 0) {
-                  recordOvertimeMinutes += earlyMinutes;
-                }
-              }
-              
-              // 이 기록의 시간외 근무 시간을 총 시간외 근무 시간에 추가
-              totalOvertimeMinutes += recordOvertimeMinutes;
-            });
-          }
-          
-          if (totalOvertimeMinutes > 0) {
-            result.overtimeMinutes = totalOvertimeMinutes;
-            result.overtimeFormatted = formatMinutesToHoursAndMinutes(totalOvertimeMinutes);
-            
-            // 총 근무시간에 시간외 근무시간 포함
-            if (result.workHours && result.totalWorkHours) {
+            // 근무일인 경우에는 일반 근무시간 + 시간외 근무시간을 총 근무시간으로 표시
+            if (!isNonWorkingDay) {
+              // 점심시간 중 시간외 근무시간도 포함
+              const totalMinutes = workHours.totalMinutes + overtimeResult.totalMinutes;
               result.totalWorkHours = {
-                totalMinutes: result.workHours.totalMinutes + totalOvertimeMinutes,
-                formattedTime: formatMinutesToHoursAndMinutes(result.workHours.totalMinutes + totalOvertimeMinutes)
+                totalMinutes,
+                formattedTime: formatMinutesToHoursAndMinutes(totalMinutes)
               };
             }
           }
@@ -428,11 +360,11 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
                   {day.status && (
                     <div className="flex flex-col space-y-0.5 mt-0.5">
                       {/* 시간외 근무 */}
-                      {day.records.some(r => r.record_type === 'overtime_end') && day.status?.overtimeMinutes && day.status?.overtimeMinutes > 0 && (
+                      {day.records.some(r => r.record_type === 'overtime_end') && day.status?.overtime && day.status?.overtime.minutes > 0 && (
                         <div className="flex items-center">
                           <div className="h-1.5 w-1.5 bg-purple-500 rounded-full"></div>
                           <span className="text-[7px] sm:text-[8px] text-purple-700 font-medium ml-0.5">
-                            {day.status.overtimeMinutes}분
+                            {day.status.overtime.minutes}분
                           </span>
                         </div>
                       )}

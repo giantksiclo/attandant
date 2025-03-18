@@ -1,11 +1,42 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, fetchProfile, saveAttendance, getTodayAttendance, getMonthAttendance, getWorkSettings, updateWorkSettings, getHolidayWorks, saveHolidayWork as saveHolidayWorkApi, deleteHolidayWork as deleteHolidayWorkApi, updateHolidayWorkExtraOvertime, type Profile, type AttendanceRecord, type AttendanceSettings, type HolidayWork } from '../lib/supabase';
+import { 
+  supabase, 
+  fetchProfile, 
+  saveAttendance, 
+  getTodayAttendance, 
+  getMonthAttendance, 
+  getWorkSettings, 
+  updateWorkSettings, 
+  getHolidayWorks, 
+  deleteHolidayWork as deleteHolidayWorkApi, 
+  updateHolidayWorkExtraOvertime, 
+  type Profile, 
+  type AttendanceRecord, 
+  type AttendanceSettings, 
+  type HolidayWork 
+} from '../lib/supabase';
 import { QRScanner } from '../components/QRScanner';
 import { QRCodeGenerator } from '../components/QRCodeGenerator';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
-import { validateQRData, getRecordTypeLabel, formatTimestamp, isWithinWorkHours, 
-  formatMinutesToHoursAndMinutes, calculateTotalWorkMinutes, calculateMonthlyOvertimeMinutes, calculateUserHolidayWorkMinutes, getAttendanceStatusForUtils } from '../lib/qrUtils';
+
+// qrUtils에서 시간 계산 관련 함수 제외하고 가져오기
+import { 
+  validateQRData, 
+  getRecordTypeLabel, 
+  formatTimestamp
+} from '../lib/qrUtils';
+
+// 시간 계산 관련 함수를 timeCalculationUtils에서 가져오기
+import { 
+  formatMinutesToHoursAndMinutes, 
+  calculateAttendanceStatus,
+  calculateMonthlyOvertimeMinutes,
+  calculateHolidayWorkMinutes,
+  isWithinWorkHours,
+  calculateWorkHours, 
+  calculateOvertimeMinutes
+} from '../lib/timeCalculationUtils';
 
 export const Dashboard = () => {
   const navigate = useNavigate();
@@ -38,6 +69,8 @@ export const Dashboard = () => {
   const [isExtraOvertimeModalOpen, setIsExtraOvertimeModalOpen] = useState(false);
   const [extraOvertimeMinutes, setExtraOvertimeMinutes] = useState<number>(0);
   const [isWorkSettingsExpanded, setIsWorkSettingsExpanded] = useState(false);
+  // 관리자 설정 드롭다운 메뉴를 위한 상태 변수 추가
+  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -391,16 +424,32 @@ export const Dashboard = () => {
     return currentTimeInMinutes >= workStartTimeInMinutes && currentTimeInMinutes < workEndTimeInMinutes;
   };
   
-  // getAttendanceStatus 함수는 qrUtils의 getAttendanceStatusForUtils를 사용
+  // getAttendanceStatus 함수는 새로운 calculateAttendanceStatus 함수를 사용
   const getAttendanceStatus = (records: AttendanceRecord[]) => {
-    return getAttendanceStatusForUtils(records, workSettings);
+    if (!records || records.length === 0 || !workSettings || workSettings.length === 0) {
+      return null;
+    }
+    
+    // 날짜 정보 추출
+    const checkInRecord = records.find(r => r.record_type === 'check_in');
+    if (!checkInRecord) return null;
+    
+    const recordDate = new Date(checkInRecord.timestamp);
+    const dateStr = `${recordDate.getFullYear()}-${String(recordDate.getMonth() + 1).padStart(2, '0')}-${String(recordDate.getDate()).padStart(2, '0')}`;
+    const isHoliday = holidayWorks.some(h => h.date === dateStr);
+    
+    return calculateAttendanceStatus(records, workSettings, isHoliday);
   };
 
   // 이 함수들은 qrUtils에서 제공하는 함수를 사용
   // 월별 총 시간외 근무 시간 계산 함수
   const calculateMonthlyOvertimeMinutesLocal = () => {
     if (!monthRecords || !profile) return 0;
-    return calculateMonthlyOvertimeMinutes(monthRecords, holidayWorks, workSettings);
+    return calculateMonthlyOvertimeMinutes(
+      monthRecords, 
+      holidayWorks.map(h => h.date), 
+      workSettings
+    );
   };
   
   // 사용자별 공휴일 근무 시간 계산 (로컬 계산용)
@@ -409,18 +458,86 @@ export const Dashboard = () => {
       return { 
         totalMinutes: 0, 
         regularMinutes: 0, 
-        exceededMinutes: 0 
+        exceededMinutes: 0,
+        extraMinutes: 0
       };
     }
-    return calculateUserHolidayWorkMinutes(userId, monthRecords, holidayWorks);
+    return calculateHolidayWorkMinutes(userId, monthRecords, holidayWorks);
   };
 
   // 총 근무시간 계산 함수 (공휴일 및 휴무일 제외 근무 + 시간외 + 휴일 근무 합산)
   const calculateTotalWorkMinutesLocal = () => {
     if (!profile || !monthRecords) return 0;
-    return calculateTotalWorkMinutes(monthRecords, holidayWorks, workSettings, profile.id);
+    
+    // 날짜별로 기록 그룹화
+    const recordsByDate = monthRecords.reduce((acc, record) => {
+      const date = new Date(record.timestamp);
+      const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      
+      if (!acc[dateKey]) {
+        acc[dateKey] = [];
+      }
+      
+      acc[dateKey].push(record);
+      return acc;
+    }, {} as Record<string, AttendanceRecord[]>);
+    
+    // 각 날짜별 총 근무시간 합산
+    let totalMinutes = 0;
+    
+    // 1. 날짜별 총 근무시간 합산 (출퇴근 기록이 있는 날짜)
+    Object.entries(recordsByDate).forEach(([dateStr, dayRecords]) => {
+      // 출근 및 퇴근(or 마지막 활동) 기록 확인
+      const checkInRecord = dayRecords.find(r => r.record_type === 'check_in');
+      if (!checkInRecord) return;
+      
+      // 퇴근 또는 마지막 활동 기록 찾기
+      const lastRecord = dayRecords
+        .filter(r => r.record_type === 'check_out' || r.record_type === 'overtime_end')
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+      
+      if (!lastRecord) return;
+      
+      // 날짜가 공휴일인지 확인
+      const isHoliday = holidayWorks.some(h => h.date === dateStr);
+      if (isHoliday) return; // 공휴일 근무는 별도 계산
+      
+      // 날짜의 요일 설정 확인
+      const checkInDate = new Date(checkInRecord.timestamp);
+      const dayOfWeek = checkInDate.getDay();
+      const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek) || workSettings[0];
+      
+      // 일별 총 근무시간 계산 (출근에서 퇴근/마지막 활동까지, 점심시간 제외)
+      const dailyWorkHours = calculateWorkHours(
+        checkInRecord, 
+        lastRecord, 
+        daySetting.lunch_start_time, 
+        daySetting.lunch_end_time
+      );
+      
+      // 점심시간 중 시간외 근무 계산
+      let lunchOvertimeMinutes = 0;
+      const hasOvertimeEnd = dayRecords.some(r => r.record_type === 'overtime_end');
+      
+      if (hasOvertimeEnd) {
+        const isNonWorkingDay = !daySetting.is_working_day;
+        const overtimeResult = calculateOvertimeMinutes(dayRecords, daySetting, isNonWorkingDay);
+        lunchOvertimeMinutes = overtimeResult.lunchOvertimeMinutes;
+      }
+      
+      // 총 근무시간 = 기본 근무시간 + 점심시간 중 시간외 근무시간
+      totalMinutes += dailyWorkHours.totalMinutes + lunchOvertimeMinutes;
+    });
+    
+    // 2. 공휴일 근무시간 합산 (사용자의 출근 기록이 있는 공휴일)
+    const holidayWorkStats = calculateHolidayWorkMinutes(profile.id, monthRecords, holidayWorks);
+    
+    // 공휴일 근무시간 합산 (8시간 이하 + 8시간 초과 + 공휴일 추가 시간외)
+    totalMinutes += holidayWorkStats.regularMinutes + holidayWorkStats.exceededMinutes + holidayWorkStats.extraMinutes;
+    
+    return totalMinutes;
   };
-
+  
   // 월별 총 시간외 근무 시간
   const monthlyOvertimeMinutes = calculateMonthlyOvertimeMinutesLocal();
   const monthlyOvertimeFormatted = monthlyOvertimeMinutes > 0 
@@ -475,8 +592,8 @@ export const Dashboard = () => {
   
   // 요일명 반환 함수
   const getDayName = (dayOfWeek: number): string => {
-    const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
-    return dayNames[dayOfWeek] || '알 수 없음';
+    const days = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+    return days[dayOfWeek] || '알 수 없음';
   };
   
   // 설정 탭 변경 함수
@@ -571,15 +688,12 @@ export const Dashboard = () => {
       // 시간을 분으로 변환
       const minutes = holidayWorkHours * 60;
       
-      const holidayData: HolidayWork = {
-        date: selectedHolidayDate,
-        work_minutes: minutes,
-        description: holidayDescription,
-        created_by: profile.id,
-        created_at: new Date().toISOString()
-      };
-      
-      const result = await saveHolidayWorkApi(holidayData);
+      // 함수 호출 인자 수정
+      const result = await updateHolidayWorkExtraOvertime(
+        selectedHolidayDate,
+        profile.id,
+        minutes
+      );
       
       if (!result.success) {
         throw new Error(result.error?.message || '저장 중 오류가 발생했습니다.');
@@ -597,7 +711,7 @@ export const Dashboard = () => {
       alert('공휴일 근무 시간이 저장되었습니다.');
     } catch (error: any) {
       console.error('공휴일 근무 시간 저장 오류:', error);
-      setError('공휴일 근무 시간 저장 중 오류가 발생했습니다: ' + error.message);
+      setError(error.message || '저장 중 오류가 발생했습니다.');
     } finally {
       setIsUpdatingHoliday(false);
     }
@@ -714,7 +828,8 @@ export const Dashboard = () => {
   const currentUserHolidayWorkMinutes = profile ? calculateUserHolidayWorkMinutesLocal(profile.id) : { 
     totalMinutes: 0, 
     regularMinutes: 0, 
-    exceededMinutes: 0 
+    exceededMinutes: 0,
+    extraMinutes: 0
   };
 
   // 시간외 근무 파트 타입 정의
@@ -891,6 +1006,11 @@ export const Dashboard = () => {
     setIsWorkSettingsExpanded(!isWorkSettingsExpanded);
   };
 
+  // 관리자 메뉴 토글 함수
+  const toggleAdminMenu = () => {
+    setIsAdminMenuOpen(!isAdminMenuOpen);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -1011,111 +1131,15 @@ export const Dashboard = () => {
         {/* 관리자용 QR 코드 생성 버튼 */}
         {profile?.role === 'admin' && (
           <div className="bg-white shadow rounded-xl p-5 mb-5">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">QR 코드 관리 (관리자용)</h2>
-            <div className="grid grid-cols-1 gap-3">
-              <button
-                onClick={() => openQRGenerator('check_in')}
-                className="p-3 rounded-xl font-medium bg-blue-100 text-blue-800"
-              >
-                출근용 QR 코드 생성
-              </button>
-              <button
-                onClick={() => openQRGenerator('check_out')}
-                className="p-3 rounded-xl font-medium bg-amber-100 text-amber-800"
-              >
-                퇴근용 QR 코드 생성
-              </button>
-              <button
-                onClick={() => openQRGenerator('overtime_end')}
-                className="p-3 rounded-xl font-medium bg-purple-100 text-purple-800"
-              >
-                시간외근무 종료용 QR 코드 생성
-              </button>
-            </div>
-          </div>
-        )}
-        
-        {/* 관리자용 공휴일 근무 시간 관리 */}
-        {profile?.role === 'admin' && (
-          <div className="bg-white shadow rounded-xl p-5 mb-5">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">공휴일 근무 시간 관리 (관리자용)</h2>
-            
-            {/* 공휴일 근무 시간 목록 */}
-            {holidayWorks.length > 0 ? (
-              <div className="mb-4 bg-gray-50 p-2 sm:p-4 rounded-lg overflow-hidden">
-                <div className="table-container">
-                  <table className="w-full" style={{minWidth: "550px"}}>
-                    <thead className="border-b">
-                      <tr>
-                        <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "35%"}}>날짜</th>
-                        <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "25%"}}>근무시간</th>
-                        <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "30%"}}>설명</th>
-                        <th className="p-2 text-right text-sm font-medium text-gray-500" style={{width: "10%"}}>관리</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {holidayWorks.map((holiday) => (
-                        <tr key={holiday.id} className="border-b border-gray-200 hover:bg-gray-100">
-                          <td className="p-2 text-sm text-gray-800">
-                            {formatDateToKorean(holiday.date)}
-                          </td>
-                          <td className="p-2 text-sm text-gray-800">
-                            <div>{formatMinutesToHours(holiday.work_minutes)}</div>
-                            {holiday.work_minutes > 480 && (
-                              <div className="text-xs text-red-500 font-medium mt-1">
-                                8시간 초과: {formatMinutesToHours(holiday.work_minutes - 480)}
-                              </div>
-                            )}
-                          </td>
-                          <td className="p-2 text-sm text-gray-800">
-                            {holiday.description}
-                          </td>
-                          <td className="p-2 text-right">
-                            <button
-                              onClick={() => deleteHolidayWork(holiday.id!)}
-                              className="text-xs text-red-600 hover:text-red-800"
-                            >
-                              삭제
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : (
-              <div className="mb-4 bg-gray-50 p-4 rounded-lg text-center text-gray-500">
-                등록된 공휴일 근무 시간이 없습니다.
-              </div>
-            )}
-            
-            <button
-              onClick={() => {
-                setSelectedHolidayDate('');
-                setHolidayWorkHours(8); // 기본값 8시간으로 변경
-                setHolidayDescription('');
-                setIsHolidayModalOpen(true);
-              }}
-              className="w-full p-3 bg-indigo-100 text-indigo-800 rounded-xl font-medium"
-            >
-              공휴일 근무 시간 추가
-            </button>
-          </div>
-        )}
-        
-        {/* 관리자용 근무시간 설정 */}
-        {profile?.role === 'admin' && (
-          <div className="bg-white shadow rounded-xl p-5 mb-5">
             <div 
               className="flex justify-between items-center cursor-pointer" 
-              onClick={toggleWorkSettings}
+              onClick={toggleAdminMenu}
             >
-              <h2 className="text-lg font-bold text-gray-900">근무시간 설정 (관리자용)</h2>
+              <h2 className="text-lg font-bold text-gray-900">관리자 설정</h2>
               <div className="text-gray-500">
                 <svg 
                   xmlns="http://www.w3.org/2000/svg" 
-                  className={`h-5 w-5 transition-transform duration-200 ${isWorkSettingsExpanded ? 'transform rotate-180' : ''}`} 
+                  className={`h-5 w-5 transition-transform duration-200 ${isAdminMenuOpen ? 'transform rotate-180' : ''}`} 
                   fill="none" 
                   viewBox="0 0 24 24" 
                   stroke="currentColor"
@@ -1125,51 +1149,172 @@ export const Dashboard = () => {
               </div>
             </div>
             
-            {isWorkSettingsExpanded && (
-              <>
-                {workSettings && workSettings.length > 0 && (
-                  <div className="mt-4 mb-4 bg-gray-50 p-4 rounded-lg overflow-x-auto">
-                    <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-4 gap-4 min-w-[300px]">
-                      {workSettings.map((setting) => (
-                        <div key={setting.day_of_week} className={`p-3 rounded-lg ${
-                          setting.is_working_day ? 'bg-blue-50 border border-blue-100' : 'bg-gray-100 border border-gray-200'
-                        }`}>
-                          <div className="flex justify-between items-center mb-2">
-                            <span className="font-medium text-gray-800">{getDayName(setting.day_of_week).replace('요일', '')}</span>
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${
-                              setting.is_working_day ? 'bg-blue-100 text-blue-800' : 'bg-gray-300 text-gray-700'
-                            }`}>
-                              {setting.is_working_day ? '근무일' : '휴무일'}
-                            </span>
-                          </div>
-                          
-                          {setting.is_working_day && (
-                            <div className="text-xs text-gray-600">
-                              <p>근무: {setting.work_start_time} ~ {setting.work_end_time}</p>
-                              {!hasNoLunchTime(setting) ? (
-                                <p>점심: {setting.lunch_start_time} ~ {setting.lunch_end_time}</p>
-                              ) : (
-                                <p>점심시간 없음</p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+            {isAdminMenuOpen && (
+              <div className="mt-4 grid grid-cols-1 gap-4">
+                {/* QR 코드 관리 섹션 */}
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <h3 className="text-md font-bold text-gray-900 mb-4">QR 코드 관리</h3>
+                  <div className="grid grid-cols-1 gap-3">
+                    <button
+                      onClick={() => openQRGenerator('check_in')}
+                      className="p-3 rounded-xl font-medium bg-blue-100 text-blue-800"
+                    >
+                      출근용 QR 코드 생성
+                    </button>
+                    <button
+                      onClick={() => openQRGenerator('check_out')}
+                      className="p-3 rounded-xl font-medium bg-amber-100 text-amber-800"
+                    >
+                      퇴근용 QR 코드 생성
+                    </button>
+                    <button
+                      onClick={() => openQRGenerator('overtime_end')}
+                      className="p-3 rounded-xl font-medium bg-purple-100 text-purple-800"
+                    >
+                      시간외근무 종료용 QR 코드 생성
+                    </button>
+                  </div>
+                </div>
+                
+                {/* 공휴일 근무 시간 관리 섹션 */}
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <h3 className="text-md font-bold text-gray-900 mb-4">공휴일 근무 시간 관리</h3>
+                  
+                  {/* 공휴일 근무 시간 목록 */}
+                  {holidayWorks.length > 0 ? (
+                    <div className="mb-4 bg-white p-2 sm:p-4 rounded-lg overflow-hidden">
+                      <div className="table-container">
+                        <table className="w-full" style={{minWidth: "550px"}}>
+                          <thead className="border-b">
+                            <tr>
+                              <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "35%"}}>날짜</th>
+                              <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "25%"}}>근무시간</th>
+                              <th className="p-2 text-left text-sm font-medium text-gray-500" style={{width: "30%"}}>설명</th>
+                              <th className="p-2 text-right text-sm font-medium text-gray-500" style={{width: "10%"}}>관리</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {holidayWorks.map((holiday) => (
+                              <tr key={holiday.id} className="border-b border-gray-200 hover:bg-gray-100">
+                                <td className="p-2 text-sm text-gray-800">
+                                  {formatDateToKorean(holiday.date)}
+                                </td>
+                                <td className="p-2 text-sm text-gray-800">
+                                  <div>{formatMinutesToHours(holiday.work_minutes)}</div>
+                                  {holiday.work_minutes > 480 && (
+                                    <div className="text-xs text-red-500 font-medium mt-1">
+                                      8시간 초과: {formatMinutesToHours(holiday.work_minutes - 480)}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="p-2 text-sm text-gray-800">
+                                  {holiday.description}
+                                </td>
+                                <td className="p-2 text-right">
+                                  <button
+                                    onClick={() => deleteHolidayWork(holiday.id!)}
+                                    className="text-xs text-red-600 hover:text-red-800"
+                                  >
+                                    삭제
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mb-4 bg-white p-4 rounded-lg text-center text-gray-500">
+                      등록된 공휴일 근무 시간이 없습니다.
+                    </div>
+                  )}
+                  
+                  <button
+                    onClick={() => {
+                      setSelectedHolidayDate('');
+                      setHolidayWorkHours(8); // 기본값 8시간으로 변경
+                      setHolidayDescription('');
+                      setIsHolidayModalOpen(true);
+                    }}
+                    className="w-full p-3 bg-indigo-100 text-indigo-800 rounded-xl font-medium"
+                  >
+                    공휴일 근무 시간 추가
+                  </button>
+                </div>
+                
+                {/* 근무시간 설정 섹션 */}
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <div 
+                    className="flex justify-between items-center cursor-pointer" 
+                    onClick={toggleWorkSettings}
+                  >
+                    <h3 className="text-md font-bold text-gray-900">근무시간 설정</h3>
+                    <div className="text-gray-500">
+                      <svg 
+                        xmlns="http://www.w3.org/2000/svg" 
+                        className={`h-5 w-5 transition-transform duration-200 ${isWorkSettingsExpanded ? 'transform rotate-180' : ''}`} 
+                        fill="none" 
+                        viewBox="0 0 24 24" 
+                        stroke="currentColor"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
                     </div>
                   </div>
-                )}
-                
-                <button
-                  onClick={openWorkSettings}
-                  className="w-full p-3 bg-indigo-100 text-indigo-800 rounded-xl font-medium"
-                >
-                  근무시간 설정 변경
-                </button>
-              </>
+                  
+                  {isWorkSettingsExpanded && (
+                    <>
+                      {workSettings && workSettings.length > 0 && (
+                        <div className="mt-4 mb-4 bg-white p-4 rounded-lg overflow-x-auto">
+                          <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-4 gap-4 min-w-[300px]">
+                            {workSettings.map((setting) => (
+                              <div key={setting.day_of_week} className={`p-3 rounded-lg ${
+                                setting.is_working_day ? 'bg-blue-50 border border-blue-100' : 'bg-gray-100 border border-gray-200'
+                              }`}>
+                                <div className="font-bold text-gray-900 mb-1.5">
+                                  {getDayName(setting.day_of_week)}
+                                </div>
+                                {setting.is_working_day ? (
+                                  <>
+                                    <div className="text-sm text-gray-600 flex justify-between mb-1">
+                                      <span>근무시간:</span>
+                                      <span className="font-medium text-blue-700">
+                                        {setting.work_start_time} - {setting.work_end_time}
+                                      </span>
+                                    </div>
+                                    <div className="text-sm text-gray-600 flex justify-between">
+                                      <span>점심시간:</span>
+                                      <span className={`font-medium ${
+                                        hasNoLunchTime(setting) ? 'text-gray-400' : 'text-blue-700'
+                                      }`}>
+                                        {hasNoLunchTime(setting) ? '없음' : `${setting.lunch_start_time} - ${setting.lunch_end_time}`}
+                                      </span>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="text-sm text-gray-500 italic">휴무일</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      <button
+                        onClick={openWorkSettings}
+                        className="w-full p-3 mt-2 bg-blue-100 text-blue-800 rounded-xl font-medium"
+                      >
+                        근무시간 설정 변경
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         )}
-
+        
         {/* 출퇴근 버튼 */}
         <div className="bg-white shadow rounded-xl p-5 mb-5">
           <h2 className="text-lg font-bold text-gray-900 mb-4">근무 기록</h2>
@@ -1341,14 +1486,11 @@ export const Dashboard = () => {
                         )}
 
                         {/* 공휴일 근무 표시 - 직원에게는 분 단위로 표시 */}
-                        {status.holidayWork && (
+                        {status.isHoliday && (
                           <div className="flex items-center text-sm">
                             <div className="h-2 w-2 bg-red-500 rounded-full mr-2"></div>
                             <span className="text-red-700 font-medium">
-                              공휴일({status.holidayWork.description}) {formatHolidayWorkTime(status.holidayWork.minutes)} 근무
-                              {status.holidayWork.extraMinutes > 0 && (
-                                <span className="ml-1">(추가 시간외: {formatMinutesToHoursAndMinutes(status.holidayWork.extraMinutes)})</span>
-                              )}
+                              공휴일 근무 {status.workHours && formatHolidayWorkTime(status.workHours.totalMinutes)}
                             </span>
                           </div>
                         )}
@@ -1359,7 +1501,7 @@ export const Dashboard = () => {
                             <div className="h-2 w-2 bg-blue-500 rounded-full mr-2"></div>
                             <span className="text-blue-700 font-medium">
                               총 {status.totalWorkHours 
-                                ? status.totalWorkHours.formatted 
+                                ? status.totalWorkHours.formattedTime 
                                 : status.workHours.formattedTime} 근무
                               {status.overtime && (
                                 <span className="ml-1 text-xs text-gray-500">(기본: {status.workHours.formattedTime})</span>
