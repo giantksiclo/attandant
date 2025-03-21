@@ -71,6 +71,14 @@ export const Dashboard = () => {
   const [isWorkSettingsExpanded, setIsWorkSettingsExpanded] = useState(false);
   // 관리자 설정 드롭다운 메뉴를 위한 상태 변수 추가
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  // 시간외 근무 사유 입력을 위한 상태 변수 추가
+  const [isOvertimeReasonModalOpen, setIsOvertimeReasonModalOpen] = useState(false);
+  const [overtimeReason, setOvertimeReason] = useState('');
+  const [pendingOvertimeRecord, setPendingOvertimeRecord] = useState<{
+    recordType: 'check_in' | 'check_out' | 'overtime_end';
+    location: string;
+    timestamp: string;
+  } | null>(null);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -250,15 +258,135 @@ export const Dashboard = () => {
           if (currentAction === 'check_out') {
             recordType = 'overtime_end';
           }
-          // 출근은 그대로 출근으로 기록하되, 시간외임을 기록
+          
+          console.log('시간외 근무 모달 열기 시작');
+          
+          // 시간외 근무 사유 입력 모달 표시
+          const recordToSave = {
+            recordType,
+            location: data.location,
+            timestamp: currentTimestamp
+          };
+          
+          setPendingOvertimeRecord(recordToSave);
+          setOvertimeReason('');
+          
+          // 모달 상태 업데이트를 확실히 하기 위해 setTimeout 사용
+          setTimeout(() => {
+            console.log('시간외 근무 모달 열기 - setTimeout 내부');
+            setIsOvertimeReasonModalOpen(true);
+            setActionLoading(false);
+          }, 100);
+          
+          console.log('시간외 근무 모달 열기 완료, 대기 레코드:', recordToSave);
+          return; // 모달에서 확인 후 saveOvertimeWithReason 함수를 호출하도록 함
         } else {
           // 취소 시 처리 중단
           throw new Error('시간외 근무 기록이 취소되었습니다.');
         }
       }
+      
+      // 일반 출결 기록 저장 (시간외 근무가 아닌 경우)
+      await saveAttendanceRecord(recordType, data.location);
+      
+    } catch (error: any) {
+      console.error('QR 출결 기록 오류:', error);
+      setError(error.message || '출결 기록 중 오류가 발생했습니다.');
+    } finally {
+      setActionLoading(false);
+      setCurrentAction(null);
+    }
+  };
 
-      // 시간외 근무 종료 QR을 찍고, 근무시간 외인 경우 자동으로 퇴근 기록도 추가
+  // 출결 기록 저장 함수 (공통 로직 분리)
+  const saveAttendanceRecord = async (recordType: 'check_in' | 'check_out' | 'overtime_end', location: string, reason?: string) => {
+    if (!profile) return;
+    
+    try {
+      setActionLoading(true);
+      
+      // 현재 시간
+      const currentTimestamp = new Date().toISOString();
+      const now = new Date();
+      
+      // 현재 시간이 근무시간 외인지 확인
+      const isOutsideWorkHours = !isWithinWorkHours(currentTimestamp, workSettings);
+      
+      // 현재 요일 설정 확인
+      const today = new Date();
+      const dayOfWeek = today.getDay();
+      const todaySettings = workSettings.find(s => s.day_of_week === dayOfWeek);
+      
+      // 자정 이후 시간(0시~1시) 여부 확인
+      const isMidnightHour = now.getHours() >= 0 && now.getHours() < 1;
+      
+      // 자정 이후 출근인 경우, 전날 미처리 출근 확인
+      if (recordType === 'check_in' && isMidnightHour) {
+        console.log('자정 직후 출근 감지 - 전날 미처리 기록 확인');
+        
+        // 전날 날짜 계산
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        // 전날 기록 조회
+        const yesterdayRecords = await getTodayAttendance(profile.id, yesterday);
+        
+        // 전날 출근은 있지만 퇴근이 없는 경우, 자동 퇴근 기록 추가
+        const hasYesterdayCheckIn = yesterdayRecords.some(r => r.record_type === 'check_in');
+        const hasYesterdayCheckOut = yesterdayRecords.some(r => r.record_type === 'check_out' || r.record_type === 'overtime_end');
+        
+        if (hasYesterdayCheckIn && !hasYesterdayCheckOut) {
+          console.log('전날 미처리 출근 기록 발견 - 자동 퇴근 처리');
+          
+          // 전날 요일 설정
+          const yesterdayDayOfWeek = yesterday.getDay();
+          const yesterdaySettings = workSettings.find(s => s.day_of_week === yesterdayDayOfWeek);
+          
+          if (yesterdaySettings) {
+            // 전날 근무 종료 시간으로 퇴근 기록 생성
+            const [workEndHour, workEndMinute] = yesterdaySettings.work_end_time.split(':').map(Number);
+            
+            // 어제 날짜의 근무 종료 시간 설정
+            const endTime = new Date(yesterday);
+            endTime.setHours(workEndHour, workEndMinute, 0, 0);
+            
+            // 종료 시간이 유효하지 않으면 자정으로 설정
+            if (endTime.getTime() > yesterday.getTime() || workEndHour >= 24) {
+              endTime.setHours(23, 59, 59, 999);
+            }
+            
+            // 전날의 자동 퇴근 기록 추가
+            await saveAttendance(
+              profile.id,
+              'check_out',
+              '자동 퇴근 처리',
+              '자정 출근에 의한 자동 퇴근 처리',
+              endTime.toISOString()
+            );
+            
+            console.log('전날 자동 퇴근 처리 완료:', endTime.toLocaleString());
+          }
+        }
+      }
+      
+      // 추가 기록 (자동 퇴근 등)
       let additionalRecord = null;
+      
+      // 자정 이후 시간외 근무 종료 스캔 시 조치
+      let isAfterMidnight = false;
+      let overtimeTimestamp = currentTimestamp;
+      if (recordType === 'overtime_end') {
+        const currentHour = today.getHours();
+        // 자정 이후 시간(0시~5시)인 경우, 전날 23:59:59로 시간 조정
+        if (currentHour >= 0 && currentHour < 5) {
+          isAfterMidnight = true;
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          yesterday.setHours(23, 59, 59, 999);
+          overtimeTimestamp = yesterday.toISOString();
+        }
+      }
+      
       if (recordType === 'overtime_end') {
         // 이미 퇴근 기록이 있는지 확인
         const hasCheckOut = todayRecords.some(record => record.record_type === 'check_out');
@@ -283,17 +411,23 @@ export const Dashboard = () => {
           additionalRecord = {
             user_id: profile.id,
             record_type: 'check_out' as 'check_in' | 'check_out' | 'overtime_end',
-            location: data.location,
+            location,
             timestamp: currentTimestamp
           };
         }
       }
       
-      // 출결 기록 저장
-      const result = await saveAttendance(profile.id, recordType, data.location);
+      // 출결 기록 저장 (자정 이후 시간외 근무인 경우 수정된 시간으로 저장)
+      const result = await saveAttendance(
+        profile.id, 
+        recordType, 
+        location, 
+        reason,
+        isAfterMidnight ? overtimeTimestamp : undefined
+      );
       
       if (!result.success) {
-        throw new Error(result.error?.message || '출결 기록 중 오류가 발생했습니다.');
+        throw new Error(result.error ? (result.error as any).message || '출결 기록 중 오류가 발생했습니다.' : '출결 기록 중 오류가 발생했습니다.');
       }
 
       // 추가 기록(자동 퇴근) 저장
@@ -320,21 +454,64 @@ export const Dashboard = () => {
       // 성공 메시지
       const actionText = getRecordTypeLabel(recordType);
       const timeInfo = isOutsideWorkHours || !todaySettings?.is_working_day ? ' (시간외 근무)' : '';
-      const formattedTime = formatTimestamp(currentTimestamp);
-      let successMessage = `${actionText} 기록이 완료되었습니다.${timeInfo}\n위치: ${data.location}\n시간: ${formattedTime}`;
+      const formattedTime = formatTimestamp(isAfterMidnight ? overtimeTimestamp : currentTimestamp);
+      let successMessage = `${actionText} 기록이 완료되었습니다.${timeInfo}\n위치: ${location}\n시간: ${formattedTime}`;
+      
+      // 자정 이후 시간외 근무 종료 처리 메시지 추가
+      if (isAfterMidnight) {
+        successMessage += '\n\n※ 자정 이후 시간외근무 종료로, 전날 23:59:59로 기록되었습니다.';
+      }
+      
+      // 사유가 있는 경우 메시지에 추가
+      if (reason) {
+        successMessage += `\n사유: ${reason}`;
+      }
       
       // 자동 퇴근 기록이 추가된 경우 메시지에 추가
       if (additionalRecord) {
-        successMessage += '\n\n또한 퇴근 기록도 자동으로 추가되었습니다.';
+        successMessage += '\n\n※ 또한 퇴근 기록도 자동으로 추가되었습니다.';
       }
       
       alert(successMessage);
+      return true;
     } catch (error: any) {
-      console.error('QR 출결 기록 오류:', error);
+      console.error('출결 기록 저장 오류:', error);
       setError(error.message || '출결 기록 중 오류가 발생했습니다.');
+      return false;
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // 시간외 근무 사유와 함께 저장하는 함수
+  const saveOvertimeWithReason = async () => {
+    console.log('시간외 근무 사유 저장 시작', pendingOvertimeRecord);
+    
+    if (!pendingOvertimeRecord) {
+      console.error('저장할 시간외 근무 기록이 없습니다.');
+      return;
+    }
+    
+    try {
+      const success = await saveAttendanceRecord(
+        pendingOvertimeRecord.recordType,
+        pendingOvertimeRecord.location,
+        overtimeReason
+      );
+      
+      console.log('시간외 근무 저장 결과:', success);
+      
+      // 모달 닫기
+      setIsOvertimeReasonModalOpen(false);
+      setPendingOvertimeRecord(null);
       setCurrentAction(null);
+      
+      if (!success) {
+        setError('시간외 근무 기록 중 오류가 발생했습니다.');
+      }
+    } catch (error) {
+      console.error('시간외 근무 저장 오류:', error);
+      setError('시간외 근무 기록 중 오류가 발생했습니다.');
     }
   };
 
@@ -395,21 +572,18 @@ export const Dashboard = () => {
     const currentMinute = now.getMinutes();
     const currentTimeInMinutes = currentHour * 60 + currentMinute;
     
-    // 근무 시작 시간
+    // 근무 시작/종료 시간 (분 단위로 변환)
     const [workStartHour, workStartMinute] = daySetting.work_start_time.split(':').map(Number);
     const workStartTimeInMinutes = workStartHour * 60 + workStartMinute;
     
-    // 근무 종료 시간
     const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
     const workEndTimeInMinutes = workEndHour * 60 + workEndMinute;
     
     // 점심 시간이 있는 경우
-    if (!hasNoLunchTime(daySetting)) {
-      // 점심 시작 시간
+    if (daySetting.lunch_start_time !== "00:00" && daySetting.lunch_end_time !== "00:00") {
       const [lunchStartHour, lunchStartMinute] = daySetting.lunch_start_time.split(':').map(Number);
       const lunchStartTimeInMinutes = lunchStartHour * 60 + lunchStartMinute;
       
-      // 점심 종료 시간
       const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
       const lunchEndTimeInMinutes = lunchEndHour * 60 + lunchEndMinute;
       
@@ -872,7 +1046,7 @@ export const Dashboard = () => {
       const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
       const lunchEndTimeInMinutes = lunchEndHour * 60 + lunchEndMinute;
       
-      // 근무 시작 전 (출근은 했으나 근무 시작 시간 전)
+      // 근무 시작 전
       if (currentTimeInMinutes < workStartTimeInMinutes) {
         return 'before_work';
       }
@@ -900,7 +1074,7 @@ export const Dashboard = () => {
       }
     }
     
-    // 그 외의 경우 (정규 근무 시간 내)
+    // 정규 근무 시간 내인 경우 (시간외 근무가 아님)
     return null;
   };
   
@@ -908,9 +1082,9 @@ export const Dashboard = () => {
   const getOvertimePartFromTimestamp = (timestamp: string): OvertimePart | null => {
     if (!workSettings || workSettings.length === 0) return null;
     
-    // 타임스탬프를 Date 객체로 변환
-    const recordTime = new Date(timestamp);
-    const dayOfWeek = recordTime.getDay();
+    // 타임스탬프의 날짜와 시간
+    const recordDate = new Date(timestamp);
+    const dayOfWeek = recordDate.getDay();
     
     // 해당 요일의 근무시간 설정 가져오기
     const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek);
@@ -918,26 +1092,22 @@ export const Dashboard = () => {
     // 해당 요일 설정이 없거나 휴무일인 경우, null 반환
     if (!daySetting || !daySetting.is_working_day) return null;
     
-    // 타임스탬프 시간 (분 단위)
-    const recordHour = recordTime.getHours();
-    const recordMinute = recordTime.getMinutes();
+    const recordHour = recordDate.getHours();
+    const recordMinute = recordDate.getMinutes();
     const recordTimeInMinutes = recordHour * 60 + recordMinute;
     
-    // 근무 시작 시간
+    // 근무 시작/종료 시간 (분 단위로 변환)
     const [workStartHour, workStartMinute] = daySetting.work_start_time.split(':').map(Number);
     const workStartTimeInMinutes = workStartHour * 60 + workStartMinute;
     
-    // 근무 종료 시간
     const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
     const workEndTimeInMinutes = workEndHour * 60 + workEndMinute;
     
     // 점심 시간이 있는 경우
-    if (!hasNoLunchTime(daySetting)) {
-      // 점심 시작 시간
+    if (daySetting.lunch_start_time !== "00:00" && daySetting.lunch_end_time !== "00:00") {
       const [lunchStartHour, lunchStartMinute] = daySetting.lunch_start_time.split(':').map(Number);
       const lunchStartTimeInMinutes = lunchStartHour * 60 + lunchStartMinute;
       
-      // 점심 종료 시간
       const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
       const lunchEndTimeInMinutes = lunchEndHour * 60 + lunchEndMinute;
       
@@ -1010,6 +1180,141 @@ export const Dashboard = () => {
   const toggleAdminMenu = () => {
     setIsAdminMenuOpen(!isAdminMenuOpen);
   };
+
+  // 자동 퇴근 처리를 위한 스케줄러 설정
+  useEffect(() => {
+    // 중복 실행 방지를 위한 플래그
+    let isProcessing = false;
+    
+    // 자정 자동 퇴근 처리 함수
+    const handleAutomaticCheckout = async () => {
+      // 이미 처리 중이면 중복 실행 방지
+      if (isProcessing || !profile || !workSettings || workSettings.length === 0) return;
+      
+      try {
+        isProcessing = true;
+        console.log('자동 퇴근 처리 체크 시작');
+        
+        // 자동 퇴근 처리할 날짜 설정 (전날)
+        const processDate = new Date();
+        processDate.setDate(processDate.getDate() - 1);
+        console.log('자동 퇴근 처리 대상 날짜:', processDate.toLocaleDateString());
+        
+        // 전날의 기록 확인
+        const records = await getTodayAttendance(profile.id, processDate);
+        
+        // 출근 기록은 있지만 퇴근 기록이 없는 경우에만 처리
+        const hasCheckIn = records.some(r => r.record_type === 'check_in');
+        const hasCheckOut = records.some(r => r.record_type === 'check_out' || r.record_type === 'overtime_end');
+        
+        if (hasCheckIn && !hasCheckOut) {
+          console.log('퇴근 기록 없음, 자동 퇴근 처리 진행');
+          
+          // 전날 요일 설정 확인
+          const dayOfWeek = processDate.getDay();
+          const daySettings = workSettings.find(s => s.day_of_week === dayOfWeek);
+          
+          if (daySettings) {
+            // 설정된 근무 종료 시간으로 퇴근 기록 생성
+            const [workEndHour, workEndMinute] = daySettings.work_end_time.split(':').map(Number);
+            
+            // 전날 날짜에 근무 종료 시간 설정
+            const endTime = new Date(processDate);
+            endTime.setHours(workEndHour, workEndMinute, 0, 0);
+            
+            // 만약 근무 종료 시간이 처리 날짜의 현재 시간보다 미래라면, 자정(23:59:59)으로 설정
+            if (endTime.getTime() > processDate.getTime() || workEndHour >= 24) {
+              endTime.setHours(23, 59, 59, 999);
+            }
+            
+            console.log('자동 퇴근 시간 설정:', endTime.toLocaleString());
+            
+            // 자동 퇴근 기록 저장
+            const result = await saveAttendance(
+              profile.id,
+              'check_out',
+              '자동 퇴근 처리',
+              '자정 자동 퇴근 처리',
+              endTime.toISOString()
+            );
+            
+            if (result.success) {
+              console.log('자동 퇴근 처리 완료:', endTime.toLocaleTimeString());
+              
+              // 기록 다시 로드
+              const updatedRecords = await getTodayAttendance(profile.id);
+              setTodayRecords(updatedRecords);
+              
+              const monthRecords = await getMonthAttendance(profile.id);
+              setMonthRecords(monthRecords);
+            } else {
+              console.error('자동 퇴근 처리 실패:', result.error);
+            }
+          }
+        } else {
+          console.log('자동 퇴근 처리 필요 없음 - 이미 퇴근 기록 있음 또는 출근 기록 없음');
+        }
+      } catch (error) {
+        console.error('자동 퇴근 처리 오류:', error);
+      } finally {
+        isProcessing = false;
+      }
+    };
+    
+    // 현재 시간 체크
+    const now = new Date();
+    const currentHour = now.getHours();
+    
+    // 자정 직후(0시~1시)인 경우 바로 실행 - 단, 초기 렌더링 시 한 번만 실행
+    if (currentHour >= 0 && currentHour < 1) {
+      // 자정 직후 출근인지 확인
+      const isMidnightCheckIn = hasCheckedIn && 
+                                todayRecords.length > 0 && 
+                                todayRecords.some(r => {
+                                  const recordHour = new Date(r.timestamp).getHours();
+                                  return r.record_type === 'check_in' && recordHour >= 0 && recordHour < 1;
+                                });
+      
+      // 자정 직후 출근이 아닌 경우에만 자동 퇴근 처리 실행
+      if (!isMidnightCheckIn) {
+        // setTimeout으로 약간의 지연을 주어 중복 실행 방지
+        setTimeout(() => {
+          handleAutomaticCheckout();
+        }, 1000);
+      } else {
+        console.log('자정 직후 출근 감지됨 - 자동 퇴근 처리 건너뜀');
+      }
+    }
+    
+    // 매일 자정에 실행되는 스케줄러 설정
+    const scheduleMidnightCheckout = () => {
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 1, 0, 0); // 자정 1분 후로 설정하여 중복 실행 가능성 감소
+      
+      // 자정까지 남은 시간(밀리초)
+      const timeUntilMidnight = tomorrow.getTime() - now.getTime();
+      
+      // 자정에 자동 퇴근 처리 실행
+      const midnightTimeout = setTimeout(() => {
+        handleAutomaticCheckout();
+        // 다음 날을 위한 스케줄러 재설정
+        scheduleMidnightCheckout();
+      }, timeUntilMidnight);
+      
+      // 컴포넌트 언마운트 시 타이머 정리를 위해 반환
+      return midnightTimeout;
+    };
+    
+    // 스케줄러 설정
+    const midnightTimeout = scheduleMidnightCheckout();
+    
+    // 컴포넌트 언마운트 시 스케줄러 정리
+    return () => {
+      clearTimeout(midnightTimeout);
+    };
+  }, [profile, workSettings, hasCheckedIn, todayRecords]);
 
   if (loading) {
     return (
@@ -1596,15 +1901,17 @@ export const Dashboard = () => {
                 ✕
               </button>
             </div>
-            <div className="flex justify-center mb-4">
+            
+            <div className="flex flex-col items-center justify-center mb-4">
               <QRCodeGenerator recordType={qrCodeType} />
+              <p className="text-sm text-center text-gray-600 mt-4">
+                이 QR 코드를 직원들이 스캔하도록 하세요
+              </p>
             </div>
-            <p className="text-sm text-gray-600 text-center mb-4">
-              이 QR 코드를 직원들이 스캔하도록 하세요
-            </p>
-            <button
+            
+            <button 
               onClick={() => setShowQRCode(false)}
-              className="w-full bg-blue-600 text-white p-3 rounded-lg font-medium"
+              className="w-full py-3 bg-gray-200 text-gray-800 rounded-lg font-medium"
             >
               닫기
             </button>
@@ -1989,6 +2296,76 @@ export const Dashboard = () => {
                 className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
               >
                 저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 시간외 근무 사유 입력 모달 - z-index 높게 설정 */}
+      {isOvertimeReasonModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">시간외 근무 사유</h3>
+              <button 
+                onClick={() => {
+                  console.log('시간외 근무 모달 닫기');
+                  setIsOvertimeReasonModalOpen(false);
+                  setPendingOvertimeRecord(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="p-4 bg-blue-50 text-blue-700 rounded-lg">
+                <p className="font-medium">시간외 근무를 기록합니다</p>
+                <p className="text-sm mt-1">
+                  근무 유형: {pendingOvertimeRecord?.recordType && getRecordTypeLabel(pendingOvertimeRecord.recordType)}
+                </p>
+                <p className="text-sm">
+                  시간: {pendingOvertimeRecord?.timestamp && formatTimestamp(pendingOvertimeRecord.timestamp)}
+                </p>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  시간외 근무 사유
+                </label>
+                <textarea
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={overtimeReason}
+                  onChange={(e) => setOvertimeReason(e.target.value)}
+                  placeholder="사유를 입력해주세요"
+                  rows={3}
+                  autoFocus
+                />
+              </div>
+            </div>
+            
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  console.log('시간외 근무 취소');
+                  setIsOvertimeReasonModalOpen(false);
+                  setPendingOvertimeRecord(null);
+                }}
+                className="flex-1 py-3 border-2 border-gray-300 rounded-lg text-gray-700 font-medium"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => {
+                  console.log('시간외 근무 저장 버튼 클릭');
+                  saveOvertimeWithReason();
+                }}
+                disabled={actionLoading}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                {actionLoading ? '저장 중...' : '저장'}
               </button>
             </div>
           </div>

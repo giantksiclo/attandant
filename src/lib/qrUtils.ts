@@ -415,8 +415,20 @@ export const getAttendanceStatusForUtils = (records: AttendanceRecord[], workSet
   // 비근무일(휴일) 체크
   const isNonWorkingDay = !daySetting.is_working_day;
   
-  // 지각 확인 (근무일인 경우에만)
-  if (daySetting.is_working_day) {
+  // 퇴근시간 이후에 출근했는지 체크
+  const checkInTime = new Date(checkInRecord.timestamp);
+  const today = new Date(checkInTime);
+  today.setHours(0, 0, 0, 0);
+  
+  // 근무 종료 시간 설정
+  const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
+  const workEndTime = new Date(today);
+  workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
+  
+  const isCheckInAfterWorkEnd = checkInTime > workEndTime;
+  
+  // 지각 확인 (근무일이고 퇴근시간 이후 출근한 경우가 아닐 때만)
+  if (daySetting.is_working_day && !isCheckInAfterWorkEnd) {
     const lateStatus = checkLateStatus(checkInRecord.timestamp, daySetting.work_start_time);
     if (lateStatus.isLate && lateStatus.minutesLate > 0) {
       result.late = { 
@@ -460,23 +472,18 @@ export const getAttendanceStatusForUtils = (records: AttendanceRecord[], workSet
           minutes: workHours.totalMinutes,
           formatted: workHours.formattedTime
         };
+        
+        // 총 근무시간 설정
+        result.totalWorkHours = {
+          minutes: workHours.totalMinutes,
+          formatted: workHours.formattedTime
+        };
       } else {
         // 근무일인 경우, 정규 근무시간을 제외한 시간만 계산
-        const checkInTime = new Date(checkInRecord.timestamp);
-        
         // 설정된 근무 시작/종료 시간
-        const today = new Date(checkInTime);
-        today.setHours(0, 0, 0, 0);
-        
-        // 근무 시작 시간 설정
         const [workStartHour, workStartMinute] = daySetting.work_start_time.split(':').map(Number);
         const workStartTime = new Date(today);
         workStartTime.setHours(workStartHour, workStartMinute, 0, 0);
-        
-        // 근무 종료 시간 설정
-        const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
-        const workEndTime = new Date(today);
-        workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
         
         // 점심 시작/종료 시간 설정
         const hasLunchTime = !hasNoLunchTime(daySetting);
@@ -500,32 +507,37 @@ export const getAttendanceStatusForUtils = (records: AttendanceRecord[], workSet
           const overtimeEndTime = new Date(overtimeEndRecord.timestamp);
           let overtimeMinutes = 0;
           
-          // 1. 정규 근무시간 이후 시간외 근무 계산
-          if (overtimeEndTime > workEndTime) {
-            // 정규 퇴근 시간 이후부터 시간외 근무 종료 시간까지 계산
-            const lateMinutes = Math.floor((overtimeEndTime.getTime() - workEndTime.getTime()) / (1000 * 60));
-            overtimeMinutes += lateMinutes;
-          }
-          
-          // 2. 점심시간 동안의 시간외 근무 계산
-          if (hasLunchTime && lunchStartTime && lunchEndTime) {
-            // 점심시간에 시간외 근무를 했는지 확인
-            if (overtimeEndTime >= lunchStartTime && overtimeEndTime <= lunchEndTime) {
-              // 점심 시작 시간부터 시간외 근무 종료 시간까지 추가
-              const lunchWorkMinutes = Math.floor((overtimeEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60));
-              overtimeMinutes += lunchWorkMinutes;
-            } else if (overtimeEndTime > lunchEndTime && checkInTime < lunchStartTime) {
-              // 점심시간을 포함하여 시간외 근무한 경우, 점심시간 전체를 추가
-              const lunchDurationMinutes = Math.floor((lunchEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60));
-              overtimeMinutes += lunchDurationMinutes;
+          // 퇴근시간 이후에 출근한 경우 -> 출근시간부터 시간외 근무 종료시간까지 전체 계산
+          if (isCheckInAfterWorkEnd) {
+            overtimeMinutes = Math.floor((overtimeEndTime.getTime() - checkInTime.getTime()) / (1000 * 60));
+          } else {
+            // 1. 정규 근무시간 이후 시간외 근무 계산
+            if (overtimeEndTime > workEndTime) {
+              // 정규 퇴근 시간 이후부터 시간외 근무 종료 시간까지 계산
+              const lateMinutes = Math.floor((overtimeEndTime.getTime() - workEndTime.getTime()) / (1000 * 60));
+              overtimeMinutes += lateMinutes;
             }
-          }
-          
-          // 3. 오전 근무 시작 전 시간외 근무 계산 (드문 경우)
-          if (overtimeEndTime <= workStartTime) {
-            const earlyMinutes = Math.floor((overtimeEndTime.getTime() - checkInTime.getTime()) / (1000 * 60));
-            if (earlyMinutes > 0) {
-              overtimeMinutes += earlyMinutes;
+            
+            // 2. 점심시간 동안의 시간외 근무 계산
+            if (hasLunchTime && lunchStartTime && lunchEndTime) {
+              // 점심시간에 시간외 근무를 했는지 확인
+              if (overtimeEndTime >= lunchStartTime && overtimeEndTime <= lunchEndTime) {
+                // 점심 시작 시간부터 시간외 근무 종료 시간까지 추가
+                const lunchWorkMinutes = Math.floor((overtimeEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60));
+                overtimeMinutes += lunchWorkMinutes;
+              } else if (overtimeEndTime > lunchEndTime && checkInTime < lunchStartTime) {
+                // 점심시간을 포함하여 시간외 근무한 경우, 점심시간 전체를 추가
+                const lunchDurationMinutes = Math.floor((lunchEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60));
+                overtimeMinutes += lunchDurationMinutes;
+              }
+            }
+            
+            // 3. 오전 근무 시작 전 시간외 근무 계산 (드문 경우)
+            if (overtimeEndTime <= workStartTime) {
+              const earlyMinutes = Math.floor((overtimeEndTime.getTime() - checkInTime.getTime()) / (1000 * 60));
+              if (earlyMinutes > 0) {
+                overtimeMinutes += earlyMinutes;
+              }
             }
           }
           

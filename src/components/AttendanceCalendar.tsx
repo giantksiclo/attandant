@@ -4,7 +4,6 @@ import {
   formatMinutesToHoursAndMinutes, 
   calculateWorkHours, 
   checkLateStatus,
-  checkEarlyLeaveStatus,
   calculateOvertimeMinutes
 } from '../lib/timeCalculationUtils';
 
@@ -134,8 +133,20 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
       }
     }
     
-    // 지각 확인 (근무일인 경우에만)
-    if (daySetting.is_working_day) {
+    // 퇴근시간 이후에 출근했는지 체크
+    const checkInTime = new Date(checkInRecord.timestamp);
+    const today = new Date(checkInTime);
+    today.setHours(0, 0, 0, 0);
+    
+    // 근무 종료 시간 설정
+    const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
+    const workEndTime = new Date(today);
+    workEndTime.setHours(workEndHour, workEndMinute, 0, 0);
+    
+    const isCheckInAfterWorkEnd = checkInTime > workEndTime;
+    
+    // 지각 확인 (근무일이고 퇴근시간 이후 출근한 경우가 아닐 때만)
+    if (daySetting.is_working_day && !isCheckInAfterWorkEnd) {
       const lateStatus = checkLateStatus(checkInRecord.timestamp, daySetting.work_start_time);
       if (lateStatus.isLate && lateStatus.minutesLate > 0) {
         result.isLate = true;
@@ -145,15 +156,6 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
     
     // 퇴근 기록이 있는 경우
     if (checkOutRecord) {
-      // 조퇴 확인 (근무일이고 시간외근무 종료가 아닌 경우에만)
-      if (daySetting.is_working_day && checkOutRecord.record_type === 'check_out') {
-        const earlyLeaveStatus = checkEarlyLeaveStatus(checkOutRecord.timestamp, daySetting.work_end_time);
-        if (earlyLeaveStatus.isEarlyLeave && earlyLeaveStatus.minutesEarly > 0) {
-          result.isEarlyLeave = true;
-          result.minutesEarly = earlyLeaveStatus.minutesEarly;
-        }
-      }
-      
       // 총 근무시간 계산
       const workHours = calculateWorkHours(
         checkInRecord, 
@@ -398,16 +400,6 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
                           </span>
                         </div>
                       )}
-                      
-                      {/* 조퇴 정보 */}
-                      {day.status.isEarlyLeave && day.status.minutesEarly && day.status.minutesEarly > 0 && (
-                        <div className="flex items-center">
-                          <div className="h-1.5 w-1.5 bg-amber-500 rounded-full"></div>
-                          <span className="text-[7px] sm:text-[8px] text-amber-700 font-medium ml-0.5">
-                            {day.status.minutesEarly}분
-                          </span>
-                        </div>
-                      )}
                     </div>
                   )}
                 </>
@@ -433,7 +425,7 @@ export const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({
         </div>
         <div className="flex items-center ml-1">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-          <span className="ml-0.5">지각/조퇴</span>
+          <span className="ml-0.5">지각</span>
         </div>
       </div>
     </div>

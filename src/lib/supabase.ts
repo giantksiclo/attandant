@@ -48,6 +48,7 @@ export type AttendanceRecord = {
   timestamp: string;
   location?: string | null;
   notes?: string | null;
+  reason?: string | null; // 시간외 근무 사유
 };
 
 // 출결 설정 타입 정의
@@ -242,37 +243,54 @@ export async function updateProfile(profile: Partial<Profile> & { id: string }) 
 }
 
 // 출결 기록 저장 함수
-export async function saveAttendance(userId: string, recordType: 'check_in' | 'check_out' | 'overtime_end', location?: string) {
-  const { data, error } = await supabase
-    .from('attendance_records')
-    .insert({
-      user_id: userId,
-      record_type: recordType,
-      timestamp: new Date().toISOString(),
-      location: location || '샤인치과' // 기본값 설정
-    })
-    .select()
-    .single();
+export async function saveAttendance(
+  userId: string, 
+  recordType: 'check_in' | 'check_out' | 'overtime_end', 
+  location?: string,
+  reason?: string, // 시간외 근무 사유 파라미터 추가
+  customTimestamp?: string // 커스텀 타임스탬프 파라미터 추가
+) {
+  try {
+    const { data, error } = await supabase
+      .from('attendance_records')
+      .insert({
+        user_id: userId,
+        record_type: recordType,
+        timestamp: customTimestamp || new Date().toISOString(), // 커스텀 타임스탬프 사용
+        location,
+        reason // 사유 필드 추가
+      });
     
-  if (error) {
-    console.error('출결 기록 저장 오류:', error);
+    if (error) throw error;
+    
+    return { success: true, data };
+  } catch (error) {
+    console.error('출결 기록 오류:', error);
     return { success: false, error };
   }
-  
-  return { success: true, data };
 }
 
 // 오늘의 출결 기록 가져오기
-export async function getTodayAttendance(userId: string) {
-  // 오늘 날짜의 시작(00:00:00) 구하기
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+export async function getTodayAttendance(userId: string, specificDate?: Date) {
+  // 특정 날짜가 지정되었으면 해당 날짜 사용, 아니면 오늘 날짜 사용
+  const targetDate = specificDate || new Date();
+  
+  // 해당 날짜의 시작(00:00:00) 구하기
+  const startOfDay = new Date(targetDate);
+  startOfDay.setHours(0, 0, 0, 0);
+  
+  // 해당 날짜의 끝(23:59:59) 구하기
+  const endOfDay = new Date(targetDate);
+  endOfDay.setHours(23, 59, 59, 999);
+  
+  console.log(`${targetDate.toLocaleDateString()} 출결 기록 조회 시작`);
   
   const { data, error } = await supabase
     .from('attendance_records')
     .select('*')
     .eq('user_id', userId)
-    .gte('timestamp', today.toISOString())
+    .gte('timestamp', startOfDay.toISOString())
+    .lte('timestamp', endOfDay.toISOString())
     .order('timestamp', { ascending: true });
     
   if (error) {
