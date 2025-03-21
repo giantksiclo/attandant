@@ -632,3 +632,129 @@ export const calculateUserHolidayWorkMinutes = async (userId: string): Promise<n
     return 0;
   }
 };
+
+// 모든 사용자의 프로필 정보 가져오기
+export async function getAllProfiles() {
+  try {
+    const { data, error } = await supabase
+      .from(PROFILES_TABLE)
+      .select('*')
+      .order('name', { ascending: true });
+    
+    if (error) {
+      console.error('모든 프로필 조회 오류:', error);
+      return [];
+    }
+    
+    return data as Profile[];
+  } catch (error) {
+    console.error('모든 프로필 조회 중 예외 발생:', error);
+    return [];
+  }
+}
+
+// 오늘의 시간외 근무 기록(사유 포함) 조회 함수
+export async function getTodayOvertimeRecords(specificDate?: Date) {
+  try {
+    // 특정 날짜가 지정되었으면 해당 날짜 사용, 아니면 오늘 날짜 사용
+    const targetDate = specificDate || new Date();
+    
+    // 해당 날짜의 시작(00:00:00) 구하기
+    const startOfDay = new Date(targetDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    // 해당 날짜의 끝(23:59:59) 구하기
+    const endOfDay = new Date(targetDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    console.log('시간외 근무 조회 날짜 범위:', {
+      start: startOfDay.toISOString(),
+      end: endOfDay.toISOString()
+    });
+    
+    // 1. 시간외 근무 종료 기록 가져오기 - JOIN 없이 기본 쿼리만 사용
+    const { data: overtimeRecords, error: overtimeError } = await supabase
+      .from('attendance_records')
+      .select('*')
+      .eq('record_type', 'overtime_end')
+      .gte('timestamp', startOfDay.toISOString())
+      .lte('timestamp', endOfDay.toISOString())
+      .order('timestamp', { ascending: false });
+    
+    if (overtimeError) {
+      console.error('시간외 근무 기록 조회 오류:', overtimeError);
+      return [];
+    }
+    
+    console.log('시간외 근무 종료 기록 조회 결과:', overtimeRecords);
+    
+    // 2. 사용자 정보 가져오기 (필요한 경우)
+    if (overtimeRecords && overtimeRecords.length > 0) {
+      // 사용자 ID 목록 추출
+      const userIds = [...new Set(overtimeRecords.map(r => r.user_id))];
+      console.log('시간외 근무를 등록한 사용자 ID 목록:', userIds);
+      
+      // 사용자 정보 조회
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles_new')  // profiles_new 테이블 사용
+        .select('id, name, department')
+        .in('id', userIds);
+      
+      if (profilesError) {
+        console.error('사용자 정보 조회 오류:', profilesError);
+        // 프로필 조회 실패해도 기록은 반환
+        return overtimeRecords;
+      }
+      
+      console.log('사용자 정보 조회 결과:', profiles);
+      
+      // 사용자 ID로 조회하기 쉽게 맵으로 변환
+      const profilesMap = (profiles || []).reduce((acc, profile) => {
+        acc[profile.id] = profile;
+        return acc;
+      }, {} as Record<string, any>);
+      
+      // 3. 각 사용자별 당일 모든 출결 기록 가져오기 (시간외 근무 계산에 필요)
+      const { data: allRecords, error: allRecordsError } = await supabase
+        .from('attendance_records')
+        .select('*')
+        .in('user_id', userIds)
+        .gte('timestamp', startOfDay.toISOString())
+        .lte('timestamp', endOfDay.toISOString())
+        .order('timestamp', { ascending: true });
+      
+      if (allRecordsError) {
+        console.error('사용자별 출결 기록 조회 오류:', allRecordsError);
+      } else {
+        console.log('사용자별 출결 기록 조회 결과:', allRecords);
+      }
+      
+      // 각 사용자별로 당일 출결 기록 그룹화
+      const recordsByUser = (allRecords || []).reduce((acc, record) => {
+        if (!acc[record.user_id]) {
+          acc[record.user_id] = [];
+        }
+        acc[record.user_id].push(record);
+        return acc;
+      }, {} as Record<string, any[]>);
+      
+      // 시간외 근무 기록에 사용자 정보와 당일 기록 추가
+      const result = overtimeRecords.map(record => ({
+        ...record,
+        profiles: profilesMap[record.user_id] || { 
+          name: '사용자 정보 없음', 
+          department: '부서 정보 없음' 
+        },
+        all_day_records: recordsByUser[record.user_id] || []
+      }));
+      
+      console.log('최종 결과:', result);
+      return result;
+    }
+    
+    return overtimeRecords || [];
+  } catch (error) {
+    console.error('시간외 근무 기록 조회 중 예외 발생:', error);
+    return [];
+  }
+}

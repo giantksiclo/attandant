@@ -11,6 +11,7 @@ import {
   getHolidayWorks, 
   deleteHolidayWork as deleteHolidayWorkApi, 
   updateHolidayWorkExtraOvertime, 
+  getTodayOvertimeRecords,
   type Profile, 
   type AttendanceRecord, 
   type AttendanceSettings, 
@@ -79,6 +80,9 @@ export const Dashboard = () => {
     location: string;
     timestamp: string;
   } | null>(null);
+  // 오늘의 시간외 근무 기록 상태
+  const [todayOvertimeRecords, setTodayOvertimeRecords] = useState<any[]>([]);
+  const [isLoadingOvertimeRecords, setIsLoadingOvertimeRecords] = useState(false);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -259,8 +263,6 @@ export const Dashboard = () => {
             recordType = 'overtime_end';
           }
           
-          console.log('시간외 근무 모달 열기 시작');
-          
           // 시간외 근무 사유 입력 모달 표시
           const recordToSave = {
             recordType,
@@ -273,12 +275,10 @@ export const Dashboard = () => {
           
           // 모달 상태 업데이트를 확실히 하기 위해 setTimeout 사용
           setTimeout(() => {
-            console.log('시간외 근무 모달 열기 - setTimeout 내부');
             setIsOvertimeReasonModalOpen(true);
             setActionLoading(false);
           }, 100);
           
-          console.log('시간외 근무 모달 열기 완료, 대기 레코드:', recordToSave);
           return; // 모달에서 확인 후 saveOvertimeWithReason 함수를 호출하도록 함
         } else {
           // 취소 시 처리 중단
@@ -485,8 +485,6 @@ export const Dashboard = () => {
 
   // 시간외 근무 사유와 함께 저장하는 함수
   const saveOvertimeWithReason = async () => {
-    console.log('시간외 근무 사유 저장 시작', pendingOvertimeRecord);
-    
     if (!pendingOvertimeRecord) {
       console.error('저장할 시간외 근무 기록이 없습니다.');
       return;
@@ -498,8 +496,6 @@ export const Dashboard = () => {
         pendingOvertimeRecord.location,
         overtimeReason
       );
-      
-      console.log('시간외 근무 저장 결과:', success);
       
       // 모달 닫기
       setIsOvertimeReasonModalOpen(false);
@@ -1316,6 +1312,72 @@ export const Dashboard = () => {
     };
   }, [profile, workSettings, hasCheckedIn, todayRecords]);
 
+  // 오늘의 시간외 근무 기록 로드 함수
+  const loadTodayOvertimeRecords = async () => {
+    if (!profile || profile.role !== 'admin') return;
+    
+    try {
+      setIsLoadingOvertimeRecords(true);
+      const records = await getTodayOvertimeRecords();
+      setTodayOvertimeRecords(records);
+    } catch (error) {
+      console.error('시간외 근무 기록 로드 오류:', error);
+    } finally {
+      setIsLoadingOvertimeRecords(false);
+    }
+  };
+  
+  // 시간외 근무 기록 로드 (관리자 메뉴 열 때마다 갱신)
+  useEffect(() => {
+    if (isAdminMenuOpen && profile?.role === 'admin') {
+      loadTodayOvertimeRecords();
+    }
+  }, [isAdminMenuOpen, profile]);
+  
+  // 오늘 기록이 변경될 때마다 시간외 근무 기록도 갱신 (관리자인 경우만)
+  useEffect(() => {
+    if (profile?.role === 'admin' && isAdminMenuOpen) {
+      loadTodayOvertimeRecords();
+    }
+  }, [todayRecords, profile]);
+  
+  // 컴포넌트 마운트 시 자동으로 시간외 근무 기록 로드 (관리자인 경우만)
+  useEffect(() => {
+    if (profile?.role === 'admin') {
+      loadTodayOvertimeRecords();
+    }
+  }, [profile]);
+  
+  // 시간외 근무 시간 계산 함수
+  const calculateOvertimeDuration = (overtimeRecord: any) => {
+    if (!workSettings || workSettings.length === 0) {
+      return 0;
+    }
+    
+    // 해당 요일의 근무 설정 찾기
+    const recordDate = new Date(overtimeRecord.timestamp);
+    const dayOfWeek = recordDate.getDay();
+    const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek);
+    
+    if (!daySetting) {
+      return 0;
+    }
+    
+    // 사용자의 당일 모든 기록 확인
+    // 서버에서 가져온 all_day_records가 있으면 해당 데이터 사용, 아니면 현재 사용자의 todayRecords 사용
+    const userDayRecords = overtimeRecord.all_day_records || 
+                          (overtimeRecord.user_id === profile?.id ? 
+                           todayRecords : []);
+    
+    // 근무일 여부 확인
+    const isNonWorkingDay = !daySetting.is_working_day;
+    
+    // 시간외 근무 시간 계산
+    const overtimeResult = calculateOvertimeMinutes(userDayRecords, daySetting, isNonWorkingDay);
+    
+    return overtimeResult.totalMinutes;
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -1615,6 +1677,68 @@ export const Dashboard = () => {
                     </>
                   )}
                 </div>
+                
+                {/* 시간외 근무 사유 섹션은 제거되었습니다 - 관리자 설정 폴딩 내에 중복되어 표시되는 코드였습니다 */}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* 시간외 근무 기록 (관리자만 표시) - 항상 노출 */}
+        {profile?.role === 'admin' && (
+          <div className="bg-white shadow rounded-xl p-5 mb-5">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">오늘의 시간외 근무 기록</h3>
+              <button 
+                onClick={loadTodayOvertimeRecords}
+                className="text-sm text-blue-600 hover:text-blue-800"
+              >
+                새로고침
+              </button>
+            </div>
+            
+            {isLoadingOvertimeRecords ? (
+              <div className="flex justify-center py-6">
+                <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-solid border-blue-500 border-r-transparent"></div>
+              </div>
+            ) : todayOvertimeRecords && todayOvertimeRecords.length > 0 ? (
+              <div className="mb-4 bg-white p-2 sm:p-4 rounded-lg overflow-x-auto">
+                <table className="w-full min-w-full">
+                  <thead className="border-b">
+                    <tr>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500">이름 (부서)</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500">종료시간</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500">시간외 근무시간</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500">사유</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {todayOvertimeRecords.map((record) => (
+                      <tr key={record.id} className="border-b border-gray-200 hover:bg-gray-50">
+                        <td className="p-2 text-sm text-gray-800">
+                          <div className="font-medium">{record.profiles?.name || '이름 없음'}</div>
+                          <div className="text-xs text-gray-500">{record.profiles?.department || '-'}</div>
+                        </td>
+                        <td className="p-2 text-sm text-gray-800">
+                          {new Date(record.timestamp).toLocaleTimeString('ko-KR', { 
+                            hour: '2-digit', 
+                            minute: '2-digit'
+                          })}
+                        </td>
+                        <td className="p-2 text-sm text-gray-800">
+                          {formatMinutesToHoursAndMinutes(calculateOvertimeDuration(record))}
+                        </td>
+                        <td className="p-2 text-sm text-gray-800">
+                          {record.reason || '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="mb-4 bg-white p-4 rounded-lg text-center text-gray-500">
+                오늘 등록된 시간외 근무 기록이 없습니다.
               </div>
             )}
           </div>
@@ -2310,7 +2434,6 @@ export const Dashboard = () => {
               <h3 className="text-lg font-bold">시간외 근무 사유</h3>
               <button 
                 onClick={() => {
-                  console.log('시간외 근무 모달 닫기');
                   setIsOvertimeReasonModalOpen(false);
                   setPendingOvertimeRecord(null);
                 }}
@@ -2349,7 +2472,6 @@ export const Dashboard = () => {
             <div className="flex space-x-3 mt-6">
               <button
                 onClick={() => {
-                  console.log('시간외 근무 취소');
                   setIsOvertimeReasonModalOpen(false);
                   setPendingOvertimeRecord(null);
                 }}
@@ -2358,10 +2480,7 @@ export const Dashboard = () => {
                 취소
               </button>
               <button
-                onClick={() => {
-                  console.log('시간외 근무 저장 버튼 클릭');
-                  saveOvertimeWithReason();
-                }}
+                onClick={saveOvertimeWithReason}
                 disabled={actionLoading}
                 className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
               >
