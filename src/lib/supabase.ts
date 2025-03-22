@@ -758,3 +758,48 @@ export async function getTodayOvertimeRecords(specificDate?: Date) {
     return [];
   }
 }
+
+// 출결 기록 수정 함수
+export async function updateAttendanceRecord(
+  recordId: number,
+  data: {
+    reason?: string;
+    timestamp?: string;
+  }
+) {
+  try {
+    const { data: updatedRecord, error } = await supabase
+      .from('attendance_records')
+      .update({
+        reason: data.reason,
+        timestamp: data.timestamp
+      })
+      .eq('id', recordId)
+      .select('*')
+      .single();
+    
+    if (error) throw error;
+    
+    return { success: true, data: updatedRecord };
+  } catch (error) {
+    console.error('출결 기록 수정 오류:', error);
+    return { success: false, error };
+  }
+}
+
+// 출결 기록 삭제 함수
+export async function deleteAttendanceRecord(recordId: number) {
+  try {
+    const { error } = await supabase
+      .from('attendance_records')
+      .delete()
+      .eq('id', recordId);
+    
+    if (error) throw error;
+    
+    return { success: true };
+  } catch (error) {
+    console.error('출결 기록 삭제 오류:', error);
+    return { success: false, error };
+  }
+}

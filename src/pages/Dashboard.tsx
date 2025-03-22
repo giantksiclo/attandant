@@ -12,6 +12,8 @@ import {
   deleteHolidayWork as deleteHolidayWorkApi, 
   updateHolidayWorkExtraOvertime, 
   getTodayOvertimeRecords,
+  updateAttendanceRecord,
+  deleteAttendanceRecord,
   type Profile, 
   type AttendanceRecord, 
   type AttendanceSettings, 
@@ -83,6 +85,13 @@ export const Dashboard = () => {
   // 오늘의 시간외 근무 기록 상태
   const [todayOvertimeRecords, setTodayOvertimeRecords] = useState<any[]>([]);
   const [isLoadingOvertimeRecords, setIsLoadingOvertimeRecords] = useState(false);
+  
+  // 시간외 근무 기록 수정/삭제 관련 상태
+  const [selectedOvertimeRecord, setSelectedOvertimeRecord] = useState<any | null>(null);
+  const [isEditOvertimeModalOpen, setIsEditOvertimeModalOpen] = useState(false);
+  const [editOvertimeReason, setEditOvertimeReason] = useState('');
+  const [editOvertimeTime, setEditOvertimeTime] = useState('');
+  const [isUpdatingOvertimeRecord, setIsUpdatingOvertimeRecord] = useState(false);
 
   // PWA 설치 프롬프트 저장
   useEffect(() => {
@@ -247,7 +256,13 @@ export const Dashboard = () => {
       // 시간외 근무 처리 - 퇴근 기록이나 출근 기록이 근무시간 외인 경우
       let recordType = currentAction;
       
-      // 오늘이 근무일이 아니거나 근무시간 외인 경우
+      // 출근이나 퇴근인 경우는 시간외 근무 확인 없이 바로 저장
+      if (currentAction === 'check_out' || currentAction === 'check_in') {
+        await saveAttendanceRecord(recordType, data.location);
+        return;
+      }
+      
+      // 시간외 근무 종료인 경우, 근무시간 외인지 확인
       if (!todaySettings?.is_working_day || isOutsideWorkHours) {
         // 사용자에게 시간외 근무로 처리됨을 알림
         const dayName = ['일', '월', '화', '수', '목', '금', '토'][dayOfWeek];
@@ -258,11 +273,6 @@ export const Dashboard = () => {
         );
         
         if (confirm) {
-          // 시간외 근무로 변경
-          if (currentAction === 'check_out') {
-            recordType = 'overtime_end';
-          }
-          
           // 시간외 근무 사유 입력 모달 표시
           const recordToSave = {
             recordType,
@@ -356,15 +366,25 @@ export const Dashboard = () => {
             }
             
             // 전날의 자동 퇴근 기록 추가
-            await saveAttendance(
+            const result = await saveAttendance(
               profile.id,
               'check_out',
               '자동 퇴근 처리',
-              '자정 출근에 의한 자동 퇴근 처리',
               endTime.toISOString()
             );
             
-            console.log('전날 자동 퇴근 처리 완료:', endTime.toLocaleString());
+            if (result.success) {
+              console.log('자동 퇴근 처리 완료:', endTime.toLocaleString());
+              
+              // 기록 다시 로드
+              const updatedRecords = await getTodayAttendance(profile.id);
+              setTodayRecords(updatedRecords);
+              
+              const monthRecords = await getMonthAttendance(profile.id);
+              setMonthRecords(monthRecords);
+            } else {
+              console.error('자동 퇴근 처리 실패:', result.error);
+            }
           }
         }
       }
@@ -1230,7 +1250,6 @@ export const Dashboard = () => {
               profile.id,
               'check_out',
               '자동 퇴근 처리',
-              '자정 자동 퇴근 처리',
               endTime.toISOString()
             );
             
@@ -1376,6 +1395,88 @@ export const Dashboard = () => {
     const overtimeResult = calculateOvertimeMinutes(userDayRecords, daySetting, isNonWorkingDay);
     
     return overtimeResult.totalMinutes;
+  };
+
+  // 시간외 근무 기록 편집 모달 열기
+  const openEditOvertimeRecord = (record: any) => {
+    setSelectedOvertimeRecord(record);
+    setEditOvertimeReason(record.reason || '');
+    
+    // 시간 형식 변환 (HH:mm)
+    const recordDate = new Date(record.timestamp);
+    const hours = recordDate.getHours().toString().padStart(2, '0');
+    const minutes = recordDate.getMinutes().toString().padStart(2, '0');
+    setEditOvertimeTime(`${hours}:${minutes}`);
+    
+    setIsEditOvertimeModalOpen(true);
+  };
+  
+  // 시간외 근무 기록 수정
+  const updateOvertimeRecord = async () => {
+    if (!selectedOvertimeRecord) return;
+    
+    try {
+      setIsUpdatingOvertimeRecord(true);
+      setError(null);
+      
+      // 시간 값 처리
+      const recordDate = new Date(selectedOvertimeRecord.timestamp);
+      const [hours, minutes] = editOvertimeTime.split(':').map(Number);
+      
+      // 날짜는 유지하고 시간만 변경
+      recordDate.setHours(hours, minutes, 0, 0);
+      
+      const result = await updateAttendanceRecord(selectedOvertimeRecord.id, {
+        reason: editOvertimeReason,
+        timestamp: recordDate.toISOString()
+      });
+      
+      if (!result.success) {
+        throw new Error(typeof result.error === 'object' ? (result.error as any)?.message || '기록 수정 중 오류가 발생했습니다.' : '기록 수정 중 오류가 발생했습니다.');
+      }
+      
+      // 모달 닫기
+      setIsEditOvertimeModalOpen(false);
+      setSelectedOvertimeRecord(null);
+      
+      // 목록 새로고침
+      await loadTodayOvertimeRecords();
+      
+      alert('시간외 근무 기록이 수정되었습니다.');
+    } catch (error: any) {
+      console.error('시간외 근무 기록 수정 오류:', error);
+      setError(error.message || '시간외 근무 기록 수정 중 오류가 발생했습니다.');
+    } finally {
+      setIsUpdatingOvertimeRecord(false);
+    }
+  };
+  
+  // 시간외 근무 기록 삭제
+  const deleteOvertimeRecord = async (recordId: number) => {
+    if (!confirm('정말 이 시간외 근무 기록을 삭제하시겠습니까?\n삭제된 기록은 복구할 수 없습니다.')) {
+      return;
+    }
+    
+    try {
+      setIsUpdatingOvertimeRecord(true);
+      setError(null);
+      
+      const result = await deleteAttendanceRecord(recordId);
+      
+      if (!result.success) {
+        throw new Error(typeof result.error === 'object' ? (result.error as any)?.message || '기록 삭제 중 오류가 발생했습니다.' : '기록 삭제 중 오류가 발생했습니다.');
+      }
+      
+      // 목록 새로고침
+      await loadTodayOvertimeRecords();
+      
+      alert('시간외 근무 기록이 삭제되었습니다.');
+    } catch (error: any) {
+      console.error('시간외 근무 기록 삭제 오류:', error);
+      setError(error.message || '시간외 근무 기록 삭제 중 오류가 발생했습니다.');
+    } finally {
+      setIsUpdatingOvertimeRecord(false);
+    }
   };
 
   if (loading) {
@@ -1702,22 +1803,22 @@ export const Dashboard = () => {
                 <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-solid border-blue-500 border-r-transparent"></div>
               </div>
             ) : todayOvertimeRecords && todayOvertimeRecords.length > 0 ? (
-              <div className="mb-4 bg-white p-2 sm:p-4 rounded-lg overflow-x-auto">
-                <table className="w-full min-w-full">
+              <div className="mb-4 bg-white p-2 sm:p-4 rounded-lg overflow-x-auto max-w-full">
+                <table className="w-full table-fixed">
                   <thead className="border-b">
                     <tr>
-                      <th className="p-2 text-left text-sm font-medium text-gray-500">이름 (부서)</th>
-                      <th className="p-2 text-left text-sm font-medium text-gray-500">종료시간</th>
-                      <th className="p-2 text-left text-sm font-medium text-gray-500">시간외 근무시간</th>
-                      <th className="p-2 text-left text-sm font-medium text-gray-500">사유</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500 w-1/4">이름</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500 w-1/5">종료시간</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500 w-1/5">시간</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500 w-1/3">사유</th>
+                      <th className="p-2 text-left text-sm font-medium text-gray-500 w-1/5">관리</th>
                     </tr>
                   </thead>
                   <tbody>
                     {todayOvertimeRecords.map((record) => (
                       <tr key={record.id} className="border-b border-gray-200 hover:bg-gray-50">
                         <td className="p-2 text-sm text-gray-800">
-                          <div className="font-medium">{record.profiles?.name || '이름 없음'}</div>
-                          <div className="text-xs text-gray-500">{record.profiles?.department || '-'}</div>
+                          {record.profiles?.name || '이름 없음'}
                         </td>
                         <td className="p-2 text-sm text-gray-800">
                           {new Date(record.timestamp).toLocaleTimeString('ko-KR', { 
@@ -1730,6 +1831,24 @@ export const Dashboard = () => {
                         </td>
                         <td className="p-2 text-sm text-gray-800">
                           {record.reason || '-'}
+                        </td>
+                        <td className="p-2 text-sm text-gray-800">
+                          <div className="flex space-x-2">
+                            <button 
+                              onClick={() => openEditOvertimeRecord(record)}
+                              className="p-1 text-blue-600 hover:text-blue-800"
+                              title="수정"
+                            >
+                              수정
+                            </button>
+                            <button 
+                              onClick={() => deleteOvertimeRecord(record.id)}
+                              className="p-1 text-red-600 hover:text-red-800"
+                              title="삭제"
+                            >
+                              삭제
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1779,7 +1898,7 @@ export const Dashboard = () => {
             
             <button
               onClick={() => handleAttendance('overtime_end')}
-              disabled={actionLoading || !hasCheckedIn || isCurrentTimeWithinWorkHours() || hasOvertimeRecordInCurrentPart() || !getCurrentOvertimePart()}
+              disabled={actionLoading || !hasCheckedIn || hasCheckedOut || isCurrentTimeWithinWorkHours() || hasOvertimeRecordInCurrentPart() || !getCurrentOvertimePart()}
               className={`p-4 rounded-xl font-medium text-lg ${
                 hasEndedOvertime 
                   ? 'bg-purple-100 text-purple-800' 
@@ -1787,6 +1906,7 @@ export const Dashboard = () => {
               } disabled:opacity-50`}
             >
               {actionLoading ? '처리 중...' : 
+               hasCheckedOut ? '퇴근 후 사용 불가' :
                isCurrentTimeWithinWorkHours() ? '근무 시간 외에만 사용 가능' : 
                !getCurrentOvertimePart() ? '시간외 근무 시간이 아닙니다' :
                hasOvertimeRecordInCurrentPart() ? `현재 시간대에 이미 기록됨` :
@@ -2481,10 +2601,86 @@ export const Dashboard = () => {
               </button>
               <button
                 onClick={saveOvertimeWithReason}
-                disabled={actionLoading}
+                disabled={actionLoading || !overtimeReason.trim()}
                 className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
               >
                 {actionLoading ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 시간외 근무 기록 수정 모달 */}
+      {isEditOvertimeModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">시간외 근무 기록 수정</h3>
+              <button 
+                onClick={() => {
+                  setIsEditOvertimeModalOpen(false);
+                  setSelectedOvertimeRecord(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="p-4 bg-blue-50 text-blue-700 rounded-lg">
+                <p className="font-medium">시간외 근무 정보</p>
+                <p className="text-sm mt-1">
+                  직원: {selectedOvertimeRecord?.profiles?.name || '이름 없음'}
+                </p>
+                <p className="text-sm">
+                  날짜: {selectedOvertimeRecord ? new Date(selectedOvertimeRecord.timestamp).toLocaleDateString('ko-KR') : ''}
+                </p>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  종료 시간
+                </label>
+                <input
+                  type="time"
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={editOvertimeTime}
+                  onChange={(e) => setEditOvertimeTime(e.target.value)}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  시간외 근무 사유
+                </label>
+                <textarea
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={editOvertimeReason}
+                  onChange={(e) => setEditOvertimeReason(e.target.value)}
+                  placeholder="사유를 입력해주세요"
+                  rows={3}
+                />
+              </div>
+            </div>
+            
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setIsEditOvertimeModalOpen(false);
+                  setSelectedOvertimeRecord(null);
+                }}
+                className="flex-1 py-3 border-2 border-gray-300 rounded-lg text-gray-700 font-medium"
+              >
+                취소
+              </button>
+              <button
+                onClick={updateOvertimeRecord}
+                disabled={isUpdatingOvertimeRecord || !editOvertimeReason.trim()}
+                className="flex-1 py-3 bg-blue-600 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                {isUpdatingOvertimeRecord ? '저장 중...' : '저장'}
               </button>
             </div>
           </div>
