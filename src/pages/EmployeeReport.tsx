@@ -18,7 +18,7 @@ import {
   calculateHolidayWorkMinutes,
   calculateWorkHours,
   calculateOvertimeMinutes,
-  checkLateStatus
+  calculateAttendanceStatus
 } from '../lib/timeCalculationUtils';
 import * as XLSX from 'xlsx';
 
@@ -251,8 +251,50 @@ export const EmployeeReport = () => {
       // 대시보드와 동일한 방식으로 총 근무시간 계산
       let totalWorkMinutes = 0;
       
-      // 지각 시간 계산을 위한 변수
-      let totalLateMinutes = 0;
+      // 지각 시간 계산 (대시보드와 동일한 방식으로 계산)
+      const calculateEmployeeLateMinutes = (records: AttendanceRecord[]) => {
+        if (!records || records.length === 0 || !workSettings || workSettings.length === 0) {
+          return 0;
+        }
+        
+        // 날짜별로 기록 그룹화 (대시보드와 동일한 방식으로)
+        const recordsByDate = records.reduce((acc, record) => {
+          const date = new Date(record.timestamp);
+          const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+          
+          if (!acc[dateKey]) {
+            acc[dateKey] = [];
+          }
+          
+          acc[dateKey].push(record);
+          return acc;
+        }, {} as Record<string, AttendanceRecord[]>);
+        
+        // 각 날짜별 지각 시간 계산 후 합산
+        let totalLateMinutes = 0;
+        
+        Object.values(recordsByDate).forEach(dayRecords => {
+          // 출근 기록 확인
+          const checkInRecord = dayRecords.find(r => r.record_type === 'check_in');
+          if (!checkInRecord) return;
+          
+          // 날짜 정보 추출
+          const recordDate = new Date(checkInRecord.timestamp);
+          const dateStr = `${recordDate.getFullYear()}-${String(recordDate.getMonth() + 1).padStart(2, '0')}-${String(recordDate.getDate()).padStart(2, '0')}`;
+          const isHoliday = holidayWorks.some(h => h.date === dateStr);
+          
+          // 대시보드와 동일하게 출결 상태 확인
+          const status = calculateAttendanceStatus(dayRecords, workSettings, isHoliday);
+          if (status && status.late && status.late.isLate) {
+            totalLateMinutes += status.late.minutesLate;
+          }
+        });
+        
+        return totalLateMinutes;
+      };
+      
+      // 지각 시간 계산
+      const totalLateMinutes = calculateEmployeeLateMinutes(records);
       
       // 날짜별로 기록 그룹화
       const recordsByDate = records.reduce((acc, record) => {
@@ -267,7 +309,7 @@ export const EmployeeReport = () => {
         return acc;
       }, {} as Record<string, AttendanceRecord[]>);
       
-      // 날짜별 총 근무시간 및 지각시간 합산
+      // 날짜별 총 근무시간 합산
       Object.entries(recordsByDate).forEach(([dateStr, dayRecords]) => {
         // 출근 및 퇴근(or 마지막 활동) 기록 확인
         const checkInRecord = dayRecords.find(r => r.record_type === 'check_in');
@@ -283,21 +325,13 @@ export const EmployeeReport = () => {
         // 날짜가 공휴일인지 확인
         const isHoliday = holidayWorks.some(h => h.date === dateStr);
         
+        // 공휴일이면 근무시간 계산 건너뛰기
+        if (isHoliday) return;
+        
         // 날짜의 요일 설정 확인
         const checkInDate = new Date(checkInRecord.timestamp);
         const dayOfWeek = checkInDate.getDay();
         const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek) || workSettings[0];
-        
-        // 지각 확인 (공휴일이 아니고 근무일인 경우에만)
-        if (!isHoliday && daySetting.is_working_day) {
-          const { isLate, minutesLate } = checkLateStatus(checkInRecord.timestamp, daySetting.work_start_time);
-          if (isLate) {
-            totalLateMinutes += minutesLate;
-          }
-        }
-        
-        // 공휴일이면 근무시간 계산 건너뛰기
-        if (isHoliday) return;
         
         // 일별 총 근무시간 계산 (출근에서 퇴근/마지막 활동까지, 점심시간 제외)
         const dailyWorkHours = calculateWorkHours(
