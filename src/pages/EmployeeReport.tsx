@@ -5,11 +5,13 @@ import {
   fetchProfile, 
   getMonthAttendance, 
   getHolidayWorks, 
-  getWorkSettings, 
+  getWorkSettings,
+  saveMonthlyStats,
   type Profile, 
   type AttendanceRecord, 
   type HolidayWork, 
-  type AttendanceSettings 
+  type AttendanceSettings,
+  type MonthlyWorkStats
 } from '../lib/supabase';
 import { 
   formatMinutesToTimeOnly,
@@ -59,6 +61,9 @@ export const EmployeeReport = () => {
   const [availableYearMonths, setAvailableYearMonths] = useState<{year: number, month: number}[]>([]);
   const [minYearMonth, setMinYearMonth] = useState<{year: number, month: number} | null>(null);
   const [maxYearMonth, setMaxYearMonth] = useState<{year: number, month: number} | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
+  const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
 
   useEffect(() => {
     // 세션 확인 및 프로필 로드
@@ -569,6 +574,49 @@ export const EmployeeReport = () => {
     XLSX.writeFile(workbook, `샤인치과_${deptText}_${yearMonthStr}_근무통계.xlsx`);
   };
   
+  // 월별 통계 저장 함수
+  const saveCurrentStats = async () => {
+    try {
+      setSaving(true);
+      
+      // 현재 표시된 직원들의 통계 데이터 수집
+      const statsToSave: MonthlyWorkStats[] = filteredAndSortedEmployeeStats.map(stat => ({
+        user_id: stat.id,
+        year: selectedYear,
+        month: selectedMonth,
+        name: stat.name,
+        total_work_minutes: stat.totalWorkMinutes,
+        overtime_minutes: stat.overtimeMinutes,
+        holiday_work_minutes: stat.holidayWorkMinutes,
+        holiday_exceeded_minutes: stat.holidayExceededMinutes,
+        late_minutes: stat.lateMinutes
+      }));
+      
+      // API 호출하여 데이터 저장
+      const result = await saveMonthlyStats(statsToSave);
+      
+      if (result.success) {
+        setSaveMessage('통계 데이터가 성공적으로 저장되었습니다.');
+        setSaveStatus('success');
+      } else {
+        setSaveMessage('통계 데이터 저장 중 오류가 발생했습니다.');
+        setSaveStatus('error');
+      }
+    } catch (error) {
+      console.error('통계 저장 오류:', error);
+      setSaveMessage('통계 데이터 저장 중 오류가 발생했습니다.');
+      setSaveStatus('error');
+    } finally {
+      setSaving(false);
+      
+      // 3초 후 메시지 숨기기
+      setTimeout(() => {
+        setSaveMessage('');
+        setSaveStatus(null);
+      }, 3000);
+    }
+  };
+  
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -642,7 +690,7 @@ export const EmployeeReport = () => {
               </div>
             </div>
             
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <select 
                 value={selectedDepartment}
                 onChange={handleDepartmentChange}
@@ -655,6 +703,26 @@ export const EmployeeReport = () => {
               </select>
               
               <button
+                onClick={saveCurrentStats}
+                disabled={saving || filteredAndSortedEmployeeStats.length === 0}
+                className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center text-sm font-medium disabled:opacity-50"
+              >
+                {saving ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mr-1.5"></div>
+                    저장 중...
+                  </>
+                ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
+                    </svg>
+                    통계 저장
+                  </>
+                )}
+              </button>
+              
+              <button
                 onClick={downloadExcel}
                 className="px-3 py-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 flex items-center text-sm font-medium"
               >
@@ -665,6 +733,12 @@ export const EmployeeReport = () => {
               </button>
             </div>
           </div>
+          
+          {saveMessage && (
+            <div className={`mt-2 p-2 rounded-md text-sm ${saveStatus === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+              {saveMessage}
+            </div>
+          )}
           
           {loading ? (
             <div className="py-10 text-center">

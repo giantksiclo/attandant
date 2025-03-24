@@ -803,3 +803,100 @@ export async function deleteAttendanceRecord(recordId: number) {
     return { success: false, error };
   }
 }
+
+// 월별 통계 데이터 타입 정의
+export type MonthlyWorkStats = {
+  id?: string;
+  user_id: string;
+  year: number;
+  month: number;
+  name: string;
+  total_work_minutes: number;
+  overtime_minutes: number;
+  holiday_work_minutes: number;
+  holiday_exceeded_minutes: number;
+  late_minutes: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+// 월별 통계 저장/업데이트 함수
+export const saveMonthlyStats = async (
+  stats: MonthlyWorkStats[]
+) => {
+  try {
+    console.log('월별 통계 저장 시작:', stats.length, '개 항목');
+    
+    // upsert 사용 - 이미 있으면 업데이트, 없으면 새로 생성
+    const { data, error } = await supabase
+      .from('monthly_work_stats')
+      .upsert(
+        stats.map(stat => ({
+          ...stat,
+          updated_at: new Date().toISOString()
+        })),
+        { onConflict: 'user_id,year,month' }
+      );
+
+    if (error) {
+      console.error('월별 통계 저장 오류:', error);
+      throw error;
+    }
+    
+    console.log('월별 통계 저장 성공:', data);
+    return { success: true, data };
+  } catch (error) {
+    console.error('월별 통계 저장 중 예외 발생:', error);
+    return { success: false, error };
+  }
+};
+
+// 월별 통계 조회 함수
+export const getMonthlyStats = async (year: number, month: number) => {
+  try {
+    console.log(`${year}년 ${month}월 통계 조회 시작`);
+    
+    const { data, error } = await supabase
+      .from('monthly_work_stats')
+      .select('*')
+      .eq('year', year)
+      .eq('month', month);
+
+    if (error) {
+      console.error('월별 통계 조회 오류:', error);
+      throw error;
+    }
+    
+    console.log(`${year}년 ${month}월 통계 조회 결과:`, data?.length || 0, '개 항목');
+    return data || [];
+  } catch (error) {
+    console.error('월별 통계 조회 중 예외 발생:', error);
+    return [];
+  }
+};
+
+// 특정 직원의 월별 통계 조회 함수
+export const getEmployeeMonthlyStats = async (userId: string, year: number, month: number) => {
+  try {
+    console.log(`${userId} 사용자의 ${year}년 ${month}월 통계 조회 시작`);
+    
+    const { data, error } = await supabase
+      .from('monthly_work_stats')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('year', year)
+      .eq('month', month)
+      .single();
+
+    if (error) {
+      console.error('직원 월별 통계 조회 오류:', error);
+      return null;
+    }
+    
+    console.log(`${userId} 사용자의 ${year}년 ${month}월 통계 조회 결과:`, data);
+    return data as MonthlyWorkStats;
+  } catch (error) {
+    console.error('직원 월별 통계 조회 중 예외 발생:', error);
+    return null;
+  }
+};
