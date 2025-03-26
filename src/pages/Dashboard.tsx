@@ -22,6 +22,7 @@ import {
 import { QRScanner } from '../components/QRScanner';
 import { QRCodeGenerator } from '../components/QRCodeGenerator';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
+import { toast } from 'react-toastify'; // toast 모듈 추가
 
 // qrUtils에서 시간 계산 관련 함수 제외하고 가져오기
 import { 
@@ -85,6 +86,7 @@ export const Dashboard = () => {
   // 오늘의 시간외 근무 기록 상태
   const [todayOvertimeRecords, setTodayOvertimeRecords] = useState<any[]>([]);
   const [isLoadingOvertimeRecords, setIsLoadingOvertimeRecords] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date()); // 선택된 날짜 상태 추가
   
   // 시간외 근무 기록 수정/삭제 관련 상태
   const [selectedOvertimeRecord, setSelectedOvertimeRecord] = useState<any | null>(null);
@@ -309,7 +311,7 @@ export const Dashboard = () => {
   };
 
   // 출결 기록 저장 함수 (공통 로직 분리)
-  const saveAttendanceRecord = async (recordType: 'check_in' | 'check_out' | 'overtime_end', location: string, reason?: string) => {
+  const saveAttendanceRecord = async (recordType: 'check_in' | 'check_out' | 'overtime_end', location: string, reason?: string, isNightOff: boolean = false) => {
     if (!profile) return;
     
     try {
@@ -407,6 +409,20 @@ export const Dashboard = () => {
         }
       }
       
+      // 시간외 근무가 야간 오프 직원인 경우 특별 처리 (기록 시간 저장)
+      let nightOffOvertimeTime = null;
+      if (recordType === 'overtime_end' && isNightOff) {
+        // 야간 오프 직원용 시간외 근무 계산을 위해 19:00 시간 저장
+        const standardEndTime = new Date(today);
+        standardEndTime.setHours(19, 0, 0, 0); // 19:00
+        nightOffOvertimeTime = standardEndTime;
+        
+        // 사유 자동 추가 (없는 경우)
+        if (!reason) {
+          reason = '야간 오프 시간외 근무';
+        }
+      }
+      
       if (recordType === 'overtime_end') {
         // 이미 퇴근 기록이 있는지 확인
         const hasCheckOut = todayRecords.some(record => record.record_type === 'check_out');
@@ -426,8 +442,8 @@ export const Dashboard = () => {
           isLunchTime = currentTotalMinutes >= lunchStartMinutes && currentTotalMinutes <= lunchEndMinutes;
         }
         
-        // 퇴근 기록이 없고, 현재 시간이 근무시간 외(점심시간은 제외)라면 퇴근 기록 추가
-        if (!hasCheckOut && (isOutsideWorkHours || !todaySettings?.is_working_day) && !isLunchTime) {
+        // 퇴근 기록이 없고, (현재 시간이 근무시간 외 또는 비근무일 또는 야간 오프 직원인 경우)이면서 점심시간이 아닌 경우 퇴근 기록 추가
+        if (!hasCheckOut && (isOutsideWorkHours || !todaySettings?.is_working_day || isNightOff) && !isLunchTime) {
           additionalRecord = {
             user_id: profile.id,
             record_type: 'check_out' as 'check_in' | 'check_out' | 'overtime_end',
@@ -443,7 +459,8 @@ export const Dashboard = () => {
         recordType, 
         location, 
         reason,
-        isAfterMidnight ? overtimeTimestamp : undefined
+        isAfterMidnight ? overtimeTimestamp : undefined,
+        nightOffOvertimeTime ? nightOffOvertimeTime.toISOString() : undefined // 야간 오프 시간 전달
       );
       
       if (!result.success) {
@@ -505,34 +522,41 @@ export const Dashboard = () => {
 
   // 시간외 근무 사유와 함께 저장하는 함수
   const saveOvertimeWithReason = async () => {
-    if (!pendingOvertimeRecord) {
-      console.error('저장할 시간외 근무 기록이 없습니다.');
-      return;
-    }
+    if (!pendingOvertimeRecord) return;
     
     try {
+      setActionLoading(true);
+      
+      // 시간외 근무 기록 저장 (사유와 함께)
       const success = await saveAttendanceRecord(
         pendingOvertimeRecord.recordType,
         pendingOvertimeRecord.location,
         overtimeReason
       );
       
-      // 모달 닫기
+      if (success) {
+        toast.success('시간외 근무 기록이 저장되었습니다.');
+      }
+    } catch (error: any) {
+      console.error('시간외 근무 기록 저장 오류:', error);
+      setError(error.message || '시간외 근무 기록 저장 중 오류가 발생했습니다.');
+    } finally {
+      setActionLoading(false);
       setIsOvertimeReasonModalOpen(false);
       setPendingOvertimeRecord(null);
       setCurrentAction(null);
-      
-      if (!success) {
-        setError('시간외 근무 기록 중 오류가 발생했습니다.');
-      }
-    } catch (error) {
-      console.error('시간외 근무 저장 오류:', error);
-      setError('시간외 근무 기록 중 오류가 발생했습니다.');
     }
   };
 
   // 출퇴근 기록 저장 함수 (기존 코드 대체)
   const handleAttendance = (recordType: 'check_in' | 'check_out' | 'overtime_end') => {
+    // 야간 오프 시간외 근무인 경우 별도 처리
+    if (recordType === 'overtime_end' && isNightOffOvertimeAvailable()) {
+      handleNightOffOvertime();
+      return;
+    }
+    
+    // 일반 출결 기록은 QR 스캔으로 처리
     openQRScanner(recordType);
   };
 
@@ -1337,7 +1361,7 @@ export const Dashboard = () => {
     
     try {
       setIsLoadingOvertimeRecords(true);
-      const records = await getTodayOvertimeRecords();
+      const records = await getTodayOvertimeRecords(selectedDate); // 선택된 날짜 전달
       setTodayOvertimeRecords(records);
     } catch (error) {
       console.error('시간외 근무 기록 로드 오류:', error);
@@ -1346,26 +1370,26 @@ export const Dashboard = () => {
     }
   };
   
-  // 시간외 근무 기록 로드 (관리자 메뉴 열 때마다 갱신)
-  useEffect(() => {
-    if (isAdminMenuOpen && profile?.role === 'admin') {
-      loadTodayOvertimeRecords();
-    }
-  }, [isAdminMenuOpen, profile]);
-  
-  // 오늘 기록이 변경될 때마다 시간외 근무 기록도 갱신 (관리자인 경우만)
-  useEffect(() => {
-    if (profile?.role === 'admin' && isAdminMenuOpen) {
-      loadTodayOvertimeRecords();
-    }
-  }, [todayRecords, profile]);
-  
-  // 컴포넌트 마운트 시 자동으로 시간외 근무 기록 로드 (관리자인 경우만)
+  // 이전 날짜로 이동
+  const goToPreviousDay = () => {
+    const prevDate = new Date(selectedDate);
+    prevDate.setDate(prevDate.getDate() - 1);
+    setSelectedDate(prevDate);
+  };
+
+  // 다음 날짜로 이동
+  const goToNextDay = () => {
+    const nextDate = new Date(selectedDate);
+    nextDate.setDate(nextDate.getDate() + 1);
+    setSelectedDate(nextDate);
+  };
+
+  // 선택된 날짜가 변경될 때마다 데이터 다시 로드
   useEffect(() => {
     if (profile?.role === 'admin') {
       loadTodayOvertimeRecords();
     }
-  }, [profile]);
+  }, [selectedDate]);
   
   // 시간외 근무 시간 계산 함수
   const calculateOvertimeDuration = (overtimeRecord: any) => {
@@ -1478,6 +1502,89 @@ export const Dashboard = () => {
       setIsUpdatingOvertimeRecord(false);
     }
   };
+
+  // 현재 요일이 야간 진료 요일인지 확인하는 함수 (퇴근시간이 19:00 이후인지)
+  const isNightWorkDay = (): boolean => {
+    if (!workSettings || workSettings.length === 0) return false;
+    
+    // 현재 요일 가져오기
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    
+    // 해당 요일의 근무시간 설정 가져오기
+    const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek);
+    
+    // 해당 요일 설정이 없거나 휴무일인 경우
+    if (!daySetting || !daySetting.is_working_day) return false;
+    
+    // 해당 요일의 근무 종료 시간이 19:00 이후인지 확인
+    const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
+    return (workEndHour > 19) || (workEndHour === 19 && workEndMinute > 0);
+  };
+
+  // 야간 오프 시간외 근무 버튼 활성화 여부 확인 함수
+  const isNightOffOvertimeAvailable = (): boolean => {
+    if (!hasCheckedIn || hasCheckedOut || !isNightWorkDay()) return false;
+    
+    // 현재 시간
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    
+    // 현재 요일 설정 가져오기
+    const dayOfWeek = now.getDay();
+    const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek);
+    if (!daySetting) return false;
+    
+    // 퇴근 시간
+    const [workEndHour, workEndMinute] = daySetting.work_end_time.split(':').map(Number);
+    
+    // 현재 시간이 19:00~퇴근시간 사이인지 확인
+    const currentTimeInMinutes = currentHour * 60 + currentMinute;
+    const standardEndInMinutes = 19 * 60; // 19:00
+    const workEndInMinutes = workEndHour * 60 + workEndMinute;
+    
+    return currentTimeInMinutes >= standardEndInMinutes && currentTimeInMinutes < workEndInMinutes;
+  };
+
+  // 야간 오프 시간외 근무 처리 함수
+  const handleNightOffOvertime = () => {
+    if (!profile || !workSettings || workSettings.length === 0) return;
+    
+    // 야간 오프 확인 대화상자 표시
+    const confirm = window.confirm(
+      '야간 오프이신가요? 시간외 근무 종료시간을 등록하겠습니다.'
+    );
+    
+    if (confirm) {
+      // 현재 위치
+      const location = '사내';
+      
+      // 야간 오프 시간외 근무로 등록
+      saveAttendanceRecord('overtime_end', location, '야간 오프 시간외 근무', true);
+    }
+  };
+
+  // 시간외 근무 기록 로드 (관리자 메뉴 열 때마다 갱신)
+  useEffect(() => {
+    if (isAdminMenuOpen && profile?.role === 'admin') {
+      loadTodayOvertimeRecords();
+    }
+  }, [isAdminMenuOpen, profile]);
+
+  // 오늘 기록이 변경될 때마다 시간외 근무 기록도 갱신 (관리자인 경우만)
+  useEffect(() => {
+    if (profile?.role === 'admin' && isAdminMenuOpen) {
+      loadTodayOvertimeRecords();
+    }
+  }, [todayRecords, profile]);
+
+  // 컴포넌트 마운트 시 자동으로 시간외 근무 기록 로드 (관리자인 경우만)
+  useEffect(() => {
+    if (profile?.role === 'admin') {
+      loadTodayOvertimeRecords();
+    }
+  }, [profile]);
 
   if (loading) {
     return (
@@ -1788,14 +1895,55 @@ export const Dashboard = () => {
         {/* 시간외 근무 기록 (관리자만 표시) - 항상 노출 */}
         {profile?.role === 'admin' && (
           <div className="bg-white shadow rounded-xl p-5 mb-5">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-gray-900">오늘의 시간외 근무 기록</h3>
-              <button 
-                onClick={loadTodayOvertimeRecords}
-                className="text-sm text-blue-600 hover:text-blue-800"
-              >
-                새로고침
-              </button>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">시간외 근무 기록</h3>
+              <div className="flex items-center mt-2 sm:mt-0">
+                <button 
+                  onClick={goToPreviousDay}
+                  className="text-gray-600 hover:text-gray-800 mr-3"
+                  title="이전 날짜"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+                </button>
+                
+                <input 
+                  type="date" 
+                  value={selectedDate.toISOString().split('T')[0]}
+                  onChange={(e) => {
+                    const newDate = new Date(e.target.value);
+                    setSelectedDate(newDate);
+                  }}
+                  className="px-2 py-1 border border-gray-300 rounded-md mr-3 text-sm"
+                />
+                
+                <button 
+                  onClick={goToNextDay}
+                  className="text-gray-600 hover:text-gray-800 mr-3"
+                  title="다음 날짜"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                </svg>
+                </button>
+                
+                <button 
+                  onClick={loadTodayOvertimeRecords}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  새로고침
+                </button>
+              </div>
+            </div>
+            
+            <div className="text-center text-sm text-gray-600 mb-3">
+              {selectedDate.toLocaleDateString('ko-KR', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric', 
+                weekday: 'long' 
+              })}의 기록
             </div>
             
             {isLoadingOvertimeRecords ? (
@@ -1857,7 +2005,7 @@ export const Dashboard = () => {
               </div>
             ) : (
               <div className="mb-4 bg-white p-4 rounded-lg text-center text-gray-500">
-                오늘 등록된 시간외 근무 기록이 없습니다.
+                선택한 날짜에 등록된 시간외 근무 기록이 없습니다.
               </div>
             )}
           </div>
@@ -1898,7 +2046,10 @@ export const Dashboard = () => {
             
             <button
               onClick={() => handleAttendance('overtime_end')}
-              disabled={actionLoading || !hasCheckedIn || hasCheckedOut || isCurrentTimeWithinWorkHours() || hasOvertimeRecordInCurrentPart() || !getCurrentOvertimePart()}
+              disabled={actionLoading || !hasCheckedIn || hasCheckedOut || 
+                        (isCurrentTimeWithinWorkHours() && !isNightOffOvertimeAvailable()) || 
+                        hasOvertimeRecordInCurrentPart() || 
+                        (!getCurrentOvertimePart() && !isNightOffOvertimeAvailable())}
               className={`p-4 rounded-xl font-medium text-lg ${
                 hasEndedOvertime 
                   ? 'bg-purple-100 text-purple-800' 
@@ -1907,6 +2058,7 @@ export const Dashboard = () => {
             >
               {actionLoading ? '처리 중...' : 
                hasCheckedOut ? '퇴근 후 사용 불가' :
+               isNightOffOvertimeAvailable() ? '야간오프 시간외 근무' :
                isCurrentTimeWithinWorkHours() ? '근무 시간 외에만 사용 가능' : 
                !getCurrentOvertimePart() ? '시간외 근무 시간이 아닙니다' :
                hasOvertimeRecordInCurrentPart() ? `현재 시간대에 이미 기록됨` :

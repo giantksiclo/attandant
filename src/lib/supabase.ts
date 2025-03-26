@@ -45,10 +45,11 @@ export type AttendanceRecord = {
   id: number;
   user_id: string;
   record_type: 'check_in' | 'check_out' | 'overtime_end';
+  location: string;
   timestamp: string;
-  location?: string | null;
-  notes?: string | null;
-  reason?: string | null; // 시간외 근무 사유
+  created_at?: string;
+  reason?: string;
+  night_off_time?: string; // 야간 오프 시간 필드 추가
 };
 
 // 출결 설정 타입 정의
@@ -248,7 +249,8 @@ export async function saveAttendance(
   recordType: 'check_in' | 'check_out' | 'overtime_end', 
   location?: string,
   reason?: string, // 시간외 근무 사유 파라미터 추가
-  customTimestamp?: string // 커스텀 타임스탬프 파라미터 추가
+  customTimestamp?: string, // 커스텀 타임스탬프 파라미터 추가
+  nightOffTime?: string // 야간 오프 시간 파라미터 추가
 ) {
   try {
     const { data, error } = await supabase
@@ -258,7 +260,8 @@ export async function saveAttendance(
         record_type: recordType,
         timestamp: customTimestamp || new Date().toISOString(), // 커스텀 타임스탬프 사용
         location,
-        reason // 사유 필드 추가
+        reason, // 사유 필드 추가
+        night_off_time: nightOffTime // 야간 오프 시간 필드 추가
       });
     
     if (error) throw error;

@@ -155,6 +155,7 @@ export const calculateWorkHours = (
  *    b. 근무종료시간 이후 시간외 근무 종료시간 입력 -> 근무종료시간부터 시간외 근무 종료시간까지
  *    c. 근무시작시간 이전 시간외 근무 종료시간 입력 -> 출근시간부터 시간외 근무 종료시간까지
  *    d. 근무종료시간 이후에 출근한 경우 -> 출근시간부터 시간외 근무 종료시간까지
+ *    e. 야간 오프인 경우 -> 19:00부터 시간외 근무 종료시간까지
  * 2. 휴무일: 출근부터 퇴근까지 모든 시간
  */
 export const calculateOvertimeMinutes = (
@@ -233,8 +234,13 @@ export const calculateOvertimeMinutes = (
     let recordOvertimeMinutes = 0;
     let recordLunchOvertimeMinutes = 0;
     
+    // e. 야간 오프인 경우 -> 19:00부터 시간외 근무 종료시간까지
+    if (overtimeEndRecord.night_off_time) {
+      const nightOffStartTime = new Date(overtimeEndRecord.night_off_time);
+      recordOvertimeMinutes = Math.floor((overtimeEndTime.getTime() - nightOffStartTime.getTime()) / (1000 * 60));
+    }
     // d. 근무종료시간 이후에 출근한 경우 -> 출근시간부터 시간외 근무 종료시간까지
-    if (isCheckInAfterWorkEnd) {
+    else if (isCheckInAfterWorkEnd) {
       recordOvertimeMinutes = Math.floor((overtimeEndTime.getTime() - checkInTime.getTime()) / (1000 * 60));
     } else {
       // a. 점심시간에 시간외 근무 종료시간 입력 -> 점심시간 시작부터 종료시간까지

@@ -5,6 +5,8 @@ import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
 import { EmployeeReport } from './pages/EmployeeReport';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import './index.css';
 // CSS는 HTML에서 직접 가져오므로 여기서는 import가 필요 없습니다.
 
@@ -56,6 +58,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/employee-report" element={<EmployeeReport />} />
       </Routes>
+      <ToastContainer position="bottom-right" autoClose={3000} />
     </BrowserRouter>
   </React.StrictMode>
 );
