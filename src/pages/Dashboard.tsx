@@ -82,11 +82,14 @@ export const Dashboard = () => {
     recordType: 'check_in' | 'check_out' | 'overtime_end';
     location: string;
     timestamp: string;
+    isNightOff?: boolean;
   } | null>(null);
   // 오늘의 시간외 근무 기록 상태
   const [todayOvertimeRecords, setTodayOvertimeRecords] = useState<any[]>([]);
   const [isLoadingOvertimeRecords, setIsLoadingOvertimeRecords] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date()); // 선택된 날짜 상태 추가
+  // 저녁식사 못함 버튼 클릭 여부 상태
+  const [dinnerNotTakenToday, setDinnerNotTakenToday] = useState<boolean>(false);
   
   // 시간외 근무 기록 수정/삭제 관련 상태
   const [selectedOvertimeRecord, setSelectedOvertimeRecord] = useState<any | null>(null);
@@ -531,7 +534,8 @@ export const Dashboard = () => {
       const success = await saveAttendanceRecord(
         pendingOvertimeRecord.recordType,
         pendingOvertimeRecord.location,
-        overtimeReason
+        overtimeReason,
+        pendingOvertimeRecord.isNightOff || false
       );
       
       if (success) {
@@ -1560,8 +1564,24 @@ export const Dashboard = () => {
       // 현재 위치
       const location = '사내';
       
-      // 야간 오프 시간외 근무로 등록
-      saveAttendanceRecord('overtime_end', location, '야간 오프 시간외 근무', true);
+      // 현재 시간 설정
+      const currentTimestamp = new Date().toISOString();
+      
+      // 시간외 근무 사유 입력 모달 표시
+      const recordToSave = {
+        recordType: 'overtime_end' as 'check_in' | 'check_out' | 'overtime_end',
+        location,
+        timestamp: currentTimestamp,
+        isNightOff: true
+      };
+      
+      setPendingOvertimeRecord(recordToSave);
+      setOvertimeReason('야간 오프 시간외 근무'); // 기본 사유 설정
+      
+      // 모달 상태 업데이트를 확실히 하기 위해 setTimeout 사용
+      setTimeout(() => {
+        setIsOvertimeReasonModalOpen(true);
+      }, 100);
     }
   };
 
@@ -1585,6 +1605,166 @@ export const Dashboard = () => {
       loadTodayOvertimeRecords();
     }
   }, [profile]);
+
+  // 컴포넌트 마운트 시 저녁식사 못함 기록이 이미 있는지 확인
+  useEffect(() => {
+    if (todayRecords.length > 0) {
+      const hasDinnerNotTakenRecord = todayRecords.some(record => 
+        record.record_type === 'overtime_end' && 
+        record.reason && 
+        record.reason.includes('야간진료 저녁식사 못함')
+      );
+      
+      // 이미 기록이 있으면 버튼 비활성화
+      if (hasDinnerNotTakenRecord) {
+        setDinnerNotTakenToday(true);
+      }
+    }
+  }, [todayRecords]);
+
+  // 현재 시간이 점심시간인지 확인하는 함수
+  const isLunchTimeNow = (): boolean => {
+    if (!workSettings || workSettings.length === 0) return false;
+    
+    // 현재 날짜와 시간
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    
+    // 해당 요일의 근무시간 설정 가져오기
+    const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek);
+    
+    // 해당 요일 설정이 없거나 휴무일인 경우, 또는 점심시간이 설정되지 않은 경우 false 반환
+    if (!daySetting || !daySetting.is_working_day || hasNoLunchTime(daySetting)) return false;
+    
+    // 현재 시간 (분 단위)
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTimeInMinutes = currentHour * 60 + currentMinute;
+    
+    // 점심 시작/종료 시간 (분 단위로 변환)
+    const [lunchStartHour, lunchStartMinute] = daySetting.lunch_start_time.split(':').map(Number);
+    const lunchStartTimeInMinutes = lunchStartHour * 60 + lunchStartMinute;
+    
+    const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
+    const lunchEndTimeInMinutes = lunchEndHour * 60 + lunchEndMinute;
+    
+    // 현재 시간이 점심시간 내인지 체크
+    return currentTimeInMinutes >= lunchStartTimeInMinutes && currentTimeInMinutes < lunchEndTimeInMinutes;
+  };
+
+  // 점심시간에 출근했는지 확인하는 함수
+  const checkedInDuringLunch = (): boolean => {
+    if (!todayRecords || todayRecords.length === 0 || !workSettings || workSettings.length === 0) return false;
+    
+    // 출근 기록 찾기
+    const checkInRecord = todayRecords.find(r => r.record_type === 'check_in');
+    if (!checkInRecord) return false;
+    
+    // 출근 시간
+    const checkInTime = new Date(checkInRecord.timestamp);
+    const checkInHour = checkInTime.getHours();
+    const checkInMinute = checkInTime.getMinutes();
+    const checkInTimeInMinutes = checkInHour * 60 + checkInMinute;
+    
+    // 요일 설정 가져오기
+    const dayOfWeek = checkInTime.getDay();
+    const daySetting = workSettings.find(s => s.day_of_week === dayOfWeek);
+    
+    // 설정이 없거나 휴무일이거나 점심시간이 없는 경우
+    if (!daySetting || !daySetting.is_working_day || hasNoLunchTime(daySetting)) return false;
+    
+    // 점심 시간 범위 확인
+    const [lunchStartHour, lunchStartMinute] = daySetting.lunch_start_time.split(':').map(Number);
+    const lunchStartTimeInMinutes = lunchStartHour * 60 + lunchStartMinute;
+    
+    const [lunchEndHour, lunchEndMinute] = daySetting.lunch_end_time.split(':').map(Number);
+    const lunchEndTimeInMinutes = lunchEndHour * 60 + lunchEndMinute;
+    
+    // 출근 시간이 점심시간 범위 내인지 확인
+    return checkInTimeInMinutes >= lunchStartTimeInMinutes && checkInTimeInMinutes < lunchEndTimeInMinutes;
+  };
+
+  // 저녁식사 못함 시간외 근무 추가 함수
+  const handleDinnerNotTaken = async () => {
+    if (!profile) {
+      setError('프로필 정보가 없습니다.');
+      return;
+    }
+    
+    try {
+      setActionLoading(true);
+      
+      // 저녁식사 못함 시간외 근무 사유
+      const reason = '야간진료 저녁식사 못함 (30분)';
+      
+      // 저녁식사 못함 시간외 근무 추가 (30분)
+      const location = '사내';
+      
+      // 시간외 근무 기록 저장
+      const result = await saveAttendance(
+        profile.id,
+        'overtime_end',
+        location,
+        reason,
+        undefined,
+        undefined,
+        30 // 30분 추가
+      );
+      
+      if (!result.success) {
+        throw new Error(result.error ? (result.error as any).message || '시간외 근무 추가 중 오류가 발생했습니다.' : '시간외 근무 추가 중 오류가 발생했습니다.');
+      }
+      
+      // 저녁식사 못함 버튼 비활성화
+      setDinnerNotTakenToday(true);
+      
+      // 기록 후 오늘의 기록 다시 로드
+      const records = await getTodayAttendance(profile.id);
+      setTodayRecords(records);
+      
+      // 이번달 기록도 다시 로드
+      const monthRecords = await getMonthAttendance(profile.id);
+      setMonthRecords(monthRecords);
+      
+      alert('저녁식사 못함 시간외 근무 30분이 추가되었습니다.');
+    } catch (error: any) {
+      console.error('저녁식사 못함 시간외 근무 추가 오류:', error);
+      setError(error.message || '저녁식사 못함 시간외 근무 추가 중 오류가 발생했습니다.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // 저녁식사 못함 버튼 표시 여부 확인 함수
+  const isDinnerNotTakenButtonAvailable = (): boolean => {
+    // 야간진료일이 아니면 버튼 표시 안함
+    if (!isNightWorkDay()) return false;
+    
+    // 출근 안했거나 이미 퇴근했으면 버튼 표시 안함
+    if (!hasCheckedIn || hasCheckedOut) return false;
+    
+    // 현재 시간
+    const now = new Date();
+    const currentHour = now.getHours();
+    
+    // 저녁 8시(20시) 이후인지 확인
+    if (currentHour < 20) return false;
+    
+    // 이미 버튼을 클릭했으면 버튼 표시 안함
+    if (dinnerNotTakenToday) return false;
+    
+    // 이미 저녁식사 못함 시간외 근무 기록이 있는지 확인
+    const hasDinnerNotTakenRecord = todayRecords.some(record => 
+      record.record_type === 'overtime_end' && 
+      record.reason && 
+      record.reason.includes('야간진료 저녁식사 못함')
+    );
+    
+    // 이미 기록이 있으면 버튼 표시 안함
+    if (hasDinnerNotTakenRecord) return false;
+    
+    return true;
+  };
 
   if (loading) {
     return (
@@ -2049,7 +2229,8 @@ export const Dashboard = () => {
               disabled={actionLoading || !hasCheckedIn || hasCheckedOut || 
                         (isCurrentTimeWithinWorkHours() && !isNightOffOvertimeAvailable()) || 
                         hasOvertimeRecordInCurrentPart() || 
-                        (!getCurrentOvertimePart() && !isNightOffOvertimeAvailable())}
+                        (!getCurrentOvertimePart() && !isNightOffOvertimeAvailable()) ||
+                        (checkedInDuringLunch() && isLunchTimeNow())}
               className={`p-4 rounded-xl font-medium text-lg ${
                 hasEndedOvertime 
                   ? 'bg-purple-100 text-purple-800' 
@@ -2058,6 +2239,7 @@ export const Dashboard = () => {
             >
               {actionLoading ? '처리 중...' : 
                hasCheckedOut ? '퇴근 후 사용 불가' :
+               (checkedInDuringLunch() && isLunchTimeNow()) ? '점심시간 출근자는 점심시간 기록 불가' :
                isNightOffOvertimeAvailable() ? '야간오프 시간외 근무' :
                isCurrentTimeWithinWorkHours() ? '근무 시간 외에만 사용 가능' : 
                !getCurrentOvertimePart() ? '시간외 근무 시간이 아닙니다' :
@@ -2065,6 +2247,23 @@ export const Dashboard = () => {
                hasEndedOvertime ? `다른 시간대 시간외근무 추가` : 
                '시간외근무 종료 QR 스캔하기'}
             </button>
+            
+            {/* 야간진료 저녁식사 못함 버튼 */}
+            {isDinnerNotTakenButtonAvailable() && (
+              <button
+                onClick={handleDinnerNotTaken}
+                disabled={actionLoading || dinnerNotTakenToday}
+                className={`p-4 rounded-xl font-medium text-lg ${
+                  dinnerNotTakenToday 
+                    ? 'bg-orange-100 text-orange-800' 
+                    : 'bg-orange-600 text-white active:bg-orange-700'
+                } disabled:opacity-50`}
+              >
+                {actionLoading ? '처리 중...' : 
+                 dinnerNotTakenToday ? '저녁식사 못함 처리됨' : 
+                 '저녁식사 못함(30분)'}
+              </button>
+            )}
             
             {/* 시간외근무 종료 기록 목록 */}
             {overtimeEndRecords.length > 0 && (
