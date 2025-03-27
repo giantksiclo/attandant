@@ -1772,6 +1772,15 @@ export const Dashboard = () => {
     return true;
   };
 
+  // 저녁식사 못함 기록이 있는지 확인하는 함수
+  const hasDinnerNotTakenRecord = (): boolean => {
+    return todayRecords.some(record => 
+      record.record_type === 'overtime_end' && 
+      record.reason && 
+      record.reason.includes('야간진료 저녁식사 못함')
+    );
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -2286,7 +2295,11 @@ export const Dashboard = () => {
                         </div>
                         {records.map((record) => (
                           <div key={record.id} className="text-sm text-purple-700 flex justify-between pl-2">
-                            <span>{formatTime(record.timestamp)}</span>
+                            <span>
+                              {record.reason && record.reason.includes('야간진료 저녁식사 못함') 
+                                ? '저녁식사 못함(30분)' 
+                                : formatTime(record.timestamp)}
+                            </span>
                           </div>
                         ))}
                       </li>
@@ -2336,10 +2349,14 @@ export const Dashboard = () => {
               {todayRecords.map((record) => (
                 <div key={record.id} className="flex justify-between items-center p-3 border border-gray-100 rounded-lg">
                   <span className="font-medium text-gray-800">
-                    {getRecordTypeLabel(record.record_type)}
+                    {record.reason && record.reason.includes('야간진료 저녁식사 못함')
+                      ? '저녁식사 못함'
+                      : getRecordTypeLabel(record.record_type)}
                   </span>
                   <span className="text-gray-600 bg-gray-100 px-3 py-1 rounded-full text-sm">
-                    {formatTime(record.timestamp)}
+                    {record.reason && record.reason.includes('야간진료 저녁식사 못함')
+                      ? '30분'
+                      : formatTime(record.timestamp)}
                     {record.location && ` (${record.location})`}
                   </span>
                 </div>
@@ -2382,7 +2399,12 @@ export const Dashboard = () => {
                             <div className="h-2 w-2 bg-purple-500 rounded-full mr-2"></div>
                             <span className="text-purple-700 font-medium">
                               시간외 {status.overtime.formatted} 근무
-                              {overtimeEndRecords.length > 1 && (
+                              {hasDinnerNotTakenRecord() && (
+                                <span className="ml-1">
+                                  (저녁식사 못함 포함)
+                                </span>
+                              )}
+                              {!hasDinnerNotTakenRecord() && overtimeEndRecords.length > 1 && (
                                 <span className="ml-1">
                                   ({overtimeEndRecords.length}회 기록됨)
                                 </span>
