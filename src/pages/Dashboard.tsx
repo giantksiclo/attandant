@@ -1212,7 +1212,13 @@ export const Dashboard = () => {
     if (!currentPart) return false; // 현재 시간이 시간외 근무 파트에 해당하지 않으면 false 반환
     
     const recordsByPart = getTodayOvertimeRecordsByPart();
-    return recordsByPart[currentPart].length > 0;
+    
+    // 저녁식사 못함 기록은 제외하고 시간외 근무 기록만 확인
+    const regularOvertimeRecords = recordsByPart[currentPart].filter(record => 
+      !(record.reason && record.reason.includes('야간진료 저녁식사 못함'))
+    );
+    
+    return regularOvertimeRecords.length > 0;
   };
 
   // 근무시간 설정 폴딩 토글 함수 추가
