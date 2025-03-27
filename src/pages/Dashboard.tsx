@@ -1403,6 +1403,11 @@ export const Dashboard = () => {
   
   // 시간외 근무 시간 계산 함수
   const calculateOvertimeDuration = (overtimeRecord: any) => {
+    // 저녁식사 못함 기록인 경우 고정 30분 반환
+    if (overtimeRecord.reason && overtimeRecord.reason.includes('야간진료 저녁식사 못함')) {
+      return 30; // 고정 30분 반환
+    }
+    
     if (!workSettings || workSettings.length === 0) {
       return 0;
     }
