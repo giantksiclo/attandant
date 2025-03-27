@@ -171,6 +171,14 @@ export const calculateOvertimeMinutes = (
   const overtimeEndRecords = dayRecords.filter(r => r.record_type === 'overtime_end');
   if (overtimeEndRecords.length === 0) return { totalMinutes: 0, lunchOvertimeMinutes: 0 };
   
+  // 저녁식사 못함 등 extra_minutes 값이 있는 기록의 시간 합산 (고정 시간 추가)
+  let extraMinutesTotal = 0;
+  overtimeEndRecords.forEach(record => {
+    if (record.extra_minutes && record.extra_minutes > 0) {
+      extraMinutesTotal += record.extra_minutes;
+    }
+  });
+  
   // 휴무일인 경우, 출근부터 퇴근까지 모든 시간을
   // 시간외 근무로 계산
   if (isNonWorkingDay) {
@@ -186,11 +194,11 @@ export const calculateOvertimeMinutes = (
         daySetting.lunch_end_time
       );
       return { 
-        totalMinutes: workHours.totalMinutes, 
+        totalMinutes: workHours.totalMinutes + extraMinutesTotal, 
         lunchOvertimeMinutes: 0 // 휴무일에는 점심시간 개념이 없음
       };
     }
-    return { totalMinutes: 0, lunchOvertimeMinutes: 0 };
+    return { totalMinutes: extraMinutesTotal, lunchOvertimeMinutes: 0 };
   }
   
   // 근무일인 경우 시간외 근무 계산
@@ -229,7 +237,13 @@ export const calculateOvertimeMinutes = (
   const isCheckInAfterWorkEnd = checkInTime > workEndTime;
   
   // 각 시간외 근무 종료 기록에 대해 계산
+  // extra_minutes가 있는 기록은 이미 별도로 계산되었으므로 건너뜀
   overtimeEndRecords.forEach(overtimeEndRecord => {
+    // 저녁식사 못함 등 extra_minutes가 있는 경우 시간 계산 생략 (이미 위에서 처리됨)
+    if (overtimeEndRecord.extra_minutes && overtimeEndRecord.extra_minutes > 0) {
+      return;
+    }
+    
     const overtimeEndTime = new Date(overtimeEndRecord.timestamp);
     let recordOvertimeMinutes = 0;
     let recordLunchOvertimeMinutes = 0;
@@ -269,7 +283,7 @@ export const calculateOvertimeMinutes = (
   });
   
   return {
-    totalMinutes: totalOvertimeMinutes,
+    totalMinutes: totalOvertimeMinutes + extraMinutesTotal,
     lunchOvertimeMinutes: lunchOvertimeMinutes
   };
 };
@@ -450,7 +464,8 @@ export const calculateAttendanceStatus = (
   // 총 근무 시간 = 실제 근무 시간(점심 제외) + 점심시간 중 시간외 근무 시간
   const totalMinutes = actualWorkHours.totalMinutes + overtimeResult.lunchOvertimeMinutes;
   
-  // 총 근무 시간 초기화
+  // 총 근무 시간 초기화 (출근~퇴근 시간 + 점심시간 중 시간외 근무 + 저녁식사 못함 등 extra_minutes)
+  // 시간외 근무 시간에는 이미 extra_minutes가 포함되어 있으므로 추가로 계산할 필요 없음
   result.totalWorkHours = {
     totalMinutes: totalMinutes,
     formattedTime: formatMinutesToHoursAndMinutes(totalMinutes)
