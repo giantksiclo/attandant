@@ -941,12 +941,12 @@ const LeaveManagement = () => {
               <table className="min-w-full divide-y divide-gray-200 table-auto">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
                     <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">신청자</th>
                     <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">신청일</th>
                     <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">기간</th>
                     <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">종류</th>
                     <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">사유</th>
-                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
                     <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
                   </tr>
                 </thead>
@@ -954,21 +954,6 @@ const LeaveManagement = () => {
                   {filteredRequests.map((request) => {
                     return (
                       <tr key={request.id}>
-                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm font-medium text-gray-900">
-                          {request.userName}
-                        </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
-                          {new Date(request.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
-                          {getLeaveDaysText(request)}
-                        </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
-                          {request.leave_type === 'annual' ? '일반 연차' : '특별 연차'}
-                        </td>
-                        <td className="px-3 py-3 text-center text-sm text-gray-500 max-w-[150px] truncate">
-                          {request.reason}
-                        </td>
                         <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
                           <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                             request.status === 'approved' 
@@ -983,6 +968,21 @@ const LeaveManagement = () => {
                                 ? '반려됨'
                                 : '승인 대기'}
                           </span>
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm font-medium text-gray-900">
+                          {request.userName}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {new Date(request.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {getLeaveDaysText(request)}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {request.leave_type === 'annual' ? '일반 연차' : '특별 연차'}
+                        </td>
+                        <td className="px-3 py-3 text-center text-sm text-gray-500 max-w-[150px] truncate">
+                          {request.reason}
                         </td>
                         <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
                           {request.status === 'pending' ? (

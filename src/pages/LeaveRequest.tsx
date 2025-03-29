@@ -694,35 +694,37 @@ const LeaveRequest = () => {
       
       {/* 내역 및 달력 토글 헤더 */}
       <div className="mt-6 bg-white shadow-md rounded-md p-4">
-        <div className="flex justify-between items-center mb-2">
+        <div className="mb-3">
           <h2 className="text-lg font-semibold">연차 신청 내역</h2>
-          <div className="flex items-center">
-            <div className="flex rounded-md shadow-sm overflow-hidden">
+        </div>
+        <div className="border-t border-gray-200 pt-3 mb-3">
+          <div className="flex items-center justify-start">
+            <div className="flex border border-gray-300 rounded-md overflow-hidden">
               <button
-                className={`py-2 px-4 flex items-center justify-center ${
+                className={`py-1 px-3 text-sm flex items-center justify-center ${
                   viewMode === 'list' 
-                    ? 'bg-blue-600 text-white font-medium' 
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
-                } transition-colors duration-200`}
+                    ? 'bg-gray-200 font-medium' 
+                    : 'bg-white hover:bg-gray-50'
+                }`}
                 onClick={() => setViewMode('list')}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
                 </svg>
-                리스트 보기
+                리스트
               </button>
               <button
-                className={`py-2 px-4 flex items-center justify-center ${
+                className={`py-1 px-3 text-sm flex items-center justify-center ${
                   viewMode === 'calendar' 
-                    ? 'bg-blue-600 text-white font-medium' 
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
-                } transition-colors duration-200`}
+                    ? 'bg-gray-200 font-medium' 
+                    : 'bg-white hover:bg-gray-50'
+                }`}
                 onClick={() => setViewMode('calendar')}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
                 </svg>
-                달력 보기
+                달력
               </button>
             </div>
           </div>
@@ -748,30 +750,17 @@ const LeaveRequest = () => {
                 <table className="min-w-full divide-y divide-gray-200 table-auto">
                   <thead className="bg-gray-50">
                     <tr>
+                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
                       <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">신청일</th>
                       <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">기간</th>
                       <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">종류</th>
                       <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">사유</th>
-                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
                       <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {existingLeaves.map((leave) => (
                       <tr key={leave.id}>
-                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
-                          {new Date(leave.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
-                          {formatDate(leave.start_date)}
-                          {leave.leave_source === 'half_day' ? ' (반차)' : ` ~ ${formatDate(leave.end_date)}`}
-                        </td>
-                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
-                          {leave.leave_type === 'annual' ? '일반 연차' : '특별 연차'}
-                        </td>
-                        <td className="px-3 py-3 text-center text-sm text-gray-500 max-w-[150px] truncate">
-                          {leave.reason}
-                        </td>
                         <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
                           <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                             leave.status === 'approved' 
@@ -786,6 +775,19 @@ const LeaveRequest = () => {
                                 ? '반려됨'
                                 : '승인 대기'}
                           </span>
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {new Date(leave.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {formatDate(leave.start_date)}
+                          {leave.leave_source === 'half_day' ? ' (반차)' : ` ~ ${formatDate(leave.end_date)}`}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {leave.leave_type === 'annual' ? '일반 연차' : '특별 연차'}
+                        </td>
+                        <td className="px-3 py-3 text-center text-sm text-gray-500 max-w-[150px] truncate">
+                          {leave.reason}
                         </td>
                         <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
                           {leave.status === 'pending' && (
