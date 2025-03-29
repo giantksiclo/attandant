@@ -861,26 +861,34 @@ const LeaveManagement = () => {
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">보기 방식</label>
-            <div className="flex space-x-4">
-              <label className="flex items-center">
-                <input
-                  type="radio"
-                  className="mr-2"
-                  checked={!calendarView}
-                  onChange={() => setCalendarView(false)}
-                />
+            <label className="block text-sm font-medium text-gray-700 mb-2">보기 방식</label>
+            <div className="flex rounded-md shadow-sm overflow-hidden">
+              <button
+                className={`flex-1 py-2 px-4 flex items-center justify-center ${
+                  !calendarView 
+                    ? 'bg-blue-600 text-white font-medium' 
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                } transition-colors duration-200`}
+                onClick={() => setCalendarView(false)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
+                </svg>
                 리스트 보기
-              </label>
-              <label className="flex items-center">
-                <input
-                  type="radio"
-                  className="mr-2"
-                  checked={calendarView}
-                  onChange={() => setCalendarView(true)}
-                />
+              </button>
+              <button
+                className={`flex-1 py-2 px-4 flex items-center justify-center ${
+                  calendarView 
+                    ? 'bg-blue-600 text-white font-medium' 
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                } transition-colors duration-200`}
+                onClick={() => setCalendarView(true)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                </svg>
                 달력 보기
-              </label>
+              </button>
             </div>
           </div>
         </div>
@@ -930,36 +938,38 @@ const LeaveManagement = () => {
             <div className="p-6 text-center">로딩 중...</div>
           ) : filteredRequests.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
+              <table className="min-w-full divide-y divide-gray-200 table-auto">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">신청자</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">기간</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">종류</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">사유</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">신청일</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">신청자</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">신청일</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">기간</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">종류</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">사유</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {filteredRequests.map((request) => {
                     return (
                       <tr key={request.id}>
-                        <td className="px-3 py-3">
-                          <div className="font-medium text-gray-900">{request.userName}</div>
-                          <div className="text-sm text-gray-500">{request.userDepartment}</div>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm font-medium text-gray-900">
+                          {request.userName}
                         </td>
-                        <td className="px-3 py-3 text-sm text-gray-500 break-words">
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {new Date(request.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
                           {getLeaveDaysText(request)}
                         </td>
-                        <td className="px-3 py-3 text-sm text-gray-500">
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
                           {request.leave_type === 'annual' ? '일반 연차' : '특별 연차'}
                         </td>
-                        <td className="px-3 py-3 text-sm text-gray-500 break-words max-w-[150px]">
+                        <td className="px-3 py-3 text-center text-sm text-gray-500 max-w-[150px] truncate">
                           {request.reason}
                         </td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
                           <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
                             request.status === 'approved' 
                               ? 'bg-green-100 text-green-800' 
@@ -974,27 +984,24 @@ const LeaveManagement = () => {
                                 : '승인 대기'}
                           </span>
                         </td>
-                        <td className="px-3 py-3 text-sm text-gray-500">
-                          {new Date(request.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-3 py-3 text-sm text-right space-x-2">
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
                           {request.status === 'pending' ? (
-                            <>
+                            <div className="flex items-center justify-center gap-2">
                               <button
-                                className="text-green-600 hover:text-green-900 mr-2"
+                                className="text-green-600 hover:text-green-900 font-medium"
                                 onClick={() => handleApproval(request.id, true)}
                                 disabled={processingId === request.id}
                               >
                                 {processingId === request.id ? '처리 중...' : '승인'}
                               </button>
                               <button
-                                className="text-red-600 hover:text-red-900"
+                                className="text-red-600 hover:text-red-900 font-medium"
                                 onClick={() => handleApproval(request.id, false)}
                                 disabled={processingId === request.id}
                               >
                                 {processingId === request.id ? '처리 중...' : '반려'}
                               </button>
-                            </>
+                            </div>
                           ) : (
                             <span className="text-gray-400">완료됨</span>
                           )}

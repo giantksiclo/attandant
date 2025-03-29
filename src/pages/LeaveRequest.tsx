@@ -49,6 +49,7 @@ const LeaveRequest = () => {
   const [selectedDates, setSelectedDates] = useState<Date[]>([]);
   const [calculatedDays, setCalculatedDays] = useState<number>(0);
   const [existingLeaves, setExistingLeaves] = useState<LeaveRequestType[]>([]);
+  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
   
   // 수정 관련 상태
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
@@ -403,6 +404,38 @@ const LeaveRequest = () => {
     const date = new Date(dateString);
     return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
   };
+  
+  // 가장 가까운 연차 날짜를 찾는 함수
+  const getClosestLeaveDate = () => {
+    if (existingLeaves.length === 0) {
+      return new Date(); // 연차 신청이 없으면 현재 날짜 반환
+    }
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // 오늘 날짜의 시간 부분을 0으로 설정
+    
+    // 미래 날짜와 과거 날짜 분리
+    const futureDates = existingLeaves
+      .filter(leave => new Date(leave.start_date) >= today)
+      .map(leave => new Date(leave.start_date));
+      
+    const pastDates = existingLeaves
+      .filter(leave => new Date(leave.start_date) < today)
+      .map(leave => new Date(leave.start_date));
+    
+    // 미래 날짜가 있으면 가장 가까운 미래 날짜 반환
+    if (futureDates.length > 0) {
+      return new Date(Math.min(...futureDates.map(date => date.getTime())));
+    }
+    
+    // 미래 날짜가 없고 과거 날짜만 있으면 가장 최근 과거 날짜 반환
+    if (pastDates.length > 0) {
+      return new Date(Math.max(...pastDates.map(date => date.getTime())));
+    }
+    
+    // 여기까지 오지 않겠지만, 혹시 모를 경우를 위해 현재 날짜 반환
+    return new Date();
+  };
 
   return (
     <div className="container mx-auto p-4">
@@ -419,9 +452,10 @@ const LeaveRequest = () => {
         </button>
       </div>
       
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* 연차 신청 폼 섹션 */}
+      <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
         {/* 연차 폼 */}
-        <div className="lg:col-span-2 bg-white shadow-md rounded-md p-6">
+        <div className="bg-white shadow-md rounded-md p-6">
           <h2 className="text-lg font-semibold mb-4">연차 신청서</h2>
           
           {/* 연차 정보 */}
@@ -475,43 +509,111 @@ const LeaveRequest = () => {
               )}
               
               <div>
-                <label htmlFor="halfDay" className="flex items-center text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 mb-2">반차 신청</label>
+                <button
+                  type="button"
+                  className={`w-full flex items-center justify-between p-3 rounded-md border ${
+                    isHalfDay 
+                      ? 'bg-blue-50 border-blue-500 text-blue-700' 
+                      : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                  }`}
+                  onClick={() => setIsHalfDay(!isHalfDay)}
+                >
+                  <div className="flex items-center">
+                    <div className={`w-5 h-5 mr-3 rounded flex items-center justify-center ${
+                      isHalfDay ? 'bg-blue-500' : 'border border-gray-400 bg-white'
+                    }`}>
+                      {isHalfDay && (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      )}
+                    </div>
+                    반차로 신청하기
+                  </div>
+                  <div className={`w-10 h-6 flex items-center rounded-full transition-all duration-300 ${
+                    isHalfDay ? 'bg-blue-400' : 'bg-gray-300'
+                  }`}>
+                    <div className={`bg-white w-5 h-5 rounded-full shadow-md transform transition-transform duration-300 ${
+                      isHalfDay ? 'translate-x-5' : 'translate-x-0.5'
+                    }`}></div>
+                  </div>
+                </button>
+                
+                {/* 히든 체크박스 (폼 제출용) */}
+                <div className="hidden">
                   <input
                     id="halfDay"
                     type="checkbox"
-                    className="mr-2"
                     checked={isHalfDay}
-                    onChange={(e) => setIsHalfDay(e.target.checked)}
+                    onChange={() => {}}
                   />
-                  반차 신청
-                </label>
+                </div>
                 
                 {isHalfDay && (
                   <div className="mt-2">
-                    <label className="text-sm font-medium text-gray-700 mb-1">반차 구분</label>
-                    <div className="flex gap-4">
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          className="mr-2"
-                          name="halfDayPeriod"
-                          value="morning"
-                          checked={halfDayPeriod === 'morning'}
-                          onChange={() => setHalfDayPeriod('morning')}
-                        />
-                        오전
-                      </label>
-                      <label className="flex items-center">
-                        <input
-                          type="radio"
-                          className="mr-2"
-                          name="halfDayPeriod"
-                          value="afternoon"
-                          checked={halfDayPeriod === 'afternoon'}
-                          onChange={() => setHalfDayPeriod('afternoon')}
-                        />
-                        오후
-                      </label>
+                    <label className="text-sm font-medium text-gray-700 mb-2 block">반차 구분</label>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        className={`flex-1 py-3 px-4 rounded-md border ${
+                          halfDayPeriod === 'morning' 
+                            ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium shadow-sm' 
+                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                        }`}
+                        onClick={() => setHalfDayPeriod('morning')}
+                      >
+                        <div className="flex items-center justify-center">
+                          <svg 
+                            xmlns="http://www.w3.org/2000/svg" 
+                            className={`h-5 w-5 mr-2 ${halfDayPeriod === 'morning' ? 'text-blue-500' : 'text-gray-400'}`} 
+                            viewBox="0 0 20 20" 
+                            fill="currentColor"
+                          >
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                          오전
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className={`flex-1 py-3 px-4 rounded-md border ${
+                          halfDayPeriod === 'afternoon' 
+                            ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium shadow-sm' 
+                            : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                        }`}
+                        onClick={() => setHalfDayPeriod('afternoon')}
+                      >
+                        <div className="flex items-center justify-center">
+                          <svg 
+                            xmlns="http://www.w3.org/2000/svg" 
+                            className={`h-5 w-5 mr-2 ${halfDayPeriod === 'afternoon' ? 'text-blue-500' : 'text-gray-400'}`} 
+                            viewBox="0 0 20 20" 
+                            fill="currentColor"
+                          >
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                          오후
+                        </div>
+                      </button>
+                    </div>
+                    
+                    {/* 히든 라디오 버튼 (폼 제출용) */}
+                    <div className="hidden">
+                      <input
+                        type="radio"
+                        name="halfDayPeriod"
+                        value="morning"
+                        checked={halfDayPeriod === 'morning'}
+                        onChange={() => {}}
+                      />
+                      <input
+                        type="radio"
+                        name="halfDayPeriod"
+                        value="afternoon"
+                        checked={halfDayPeriod === 'afternoon'}
+                        onChange={() => {}}
+                      />
                     </div>
                   </div>
                 )}
@@ -519,26 +621,40 @@ const LeaveRequest = () => {
               
               <div>
                 <label htmlFor="startDate" className="block text-sm font-medium text-gray-700 mb-1">시작일</label>
-                <input
-                  id="startDate"
-                  type="date"
-                  className="w-full p-2 border border-gray-300 rounded-md"
-                  value={startDate ? startDate.toISOString().split('T')[0] : ''}
-                  onChange={(e) => setStartDate(e.target.value ? new Date(e.target.value) : null)}
-                />
+                <div className="relative">
+                  <input
+                    id="startDate"
+                    type="date"
+                    className="w-full p-3 sm:p-2 border border-gray-300 rounded-md text-base appearance-none h-12 sm:h-auto"
+                    value={startDate ? startDate.toISOString().split('T')[0] : ''}
+                    onChange={(e) => setStartDate(e.target.value ? new Date(e.target.value) : null)}
+                  />
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                </div>
               </div>
               
               {!isHalfDay && (
                 <div>
                   <label htmlFor="endDate" className="block text-sm font-medium text-gray-700 mb-1">종료일</label>
-                  <input
-                    id="endDate"
-                    type="date"
-                    className="w-full p-2 border border-gray-300 rounded-md"
-                    value={endDate ? endDate.toISOString().split('T')[0] : ''}
-                    onChange={(e) => setEndDate(e.target.value ? new Date(e.target.value) : null)}
-                    min={startDate ? startDate.toISOString().split('T')[0] : ''}
-                  />
+                  <div className="relative">
+                    <input
+                      id="endDate"
+                      type="date"
+                      className="w-full p-3 sm:p-2 border border-gray-300 rounded-md text-base appearance-none h-12 sm:h-auto"
+                      value={endDate ? endDate.toISOString().split('T')[0] : ''}
+                      onChange={(e) => setEndDate(e.target.value ? new Date(e.target.value) : null)}
+                      min={startDate ? startDate.toISOString().split('T')[0] : ''}
+                    />
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  </div>
                 </div>
               )}
               
@@ -574,110 +690,151 @@ const LeaveRequest = () => {
             </div>
           </form>
         </div>
-        
-        {/* 달력 뷰 */}
-        <div className="lg:col-span-1 bg-white shadow-md rounded-md p-6">
-          <h2 className="text-lg font-semibold mb-4">연차 일정</h2>
-          <LeaveCalendar 
-            highlightDates={selectedDates}
-            leaveRequests={existingLeaves}
-          />
-        </div>
       </div>
       
-      {/* 기존 연차 신청 목록 */}
-      <div className="mt-6 bg-white shadow-md rounded-md p-6">
-        <h2 className="text-lg font-semibold mb-4">신청 내역</h2>
-        {existingLeaves.length > 0 ? (
-          <div className="overflow-x-auto -mx-4 sm:-mx-0">
-            <table className="min-w-full divide-y divide-gray-200 table-auto">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">신청일</th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">기간</th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">종류</th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">사유</th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {existingLeaves.map((leave) => (
-                  <tr key={leave.id}>
-                    <td className="px-3 py-3 text-sm text-gray-500">
-                      {new Date(leave.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-3 py-3 text-sm text-gray-500 break-words min-w-[120px]">
-                      {formatDate(leave.start_date)}
-                      {leave.leave_source === 'half_day' ? ' (반차)' : ` ~ ${formatDate(leave.end_date)}`}
-                    </td>
-                    <td className="px-3 py-3 text-sm text-gray-500">
-                      {leave.leave_type === 'annual' ? '일반 연차' : '특별 연차'}
-                    </td>
-                    <td className="px-3 py-3 text-sm text-gray-500 break-words max-w-[200px]">
-                      {leave.reason}
-                    </td>
-                    <td className="px-3 py-3 text-sm">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        leave.status === 'approved' 
-                          ? 'bg-green-100 text-green-800' 
-                          : leave.status === 'rejected' 
-                            ? 'bg-red-100 text-red-800'
-                            : 'bg-yellow-100 text-yellow-800'
-                      }`}>
-                        {leave.status === 'approved' 
-                          ? '승인됨' 
-                          : leave.status === 'rejected' 
-                            ? '반려됨'
-                            : '승인 대기'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-sm whitespace-nowrap">
-                      {leave.status === 'pending' && (
-                        <>
-                          <button
-                            onClick={() => openEditModal(leave)}
-                            className="text-blue-600 hover:text-blue-900 mr-3"
-                            disabled={processingId === leave.id}
-                          >
-                            수정
-                          </button>
-                          
-                          {withdrawConfirmId === leave.id ? (
-                            <>
+      {/* 내역 및 달력 토글 헤더 */}
+      <div className="mt-6 bg-white shadow-md rounded-md p-4">
+        <div className="flex justify-between items-center mb-2">
+          <h2 className="text-lg font-semibold">연차 신청 내역</h2>
+          <div className="flex items-center">
+            <div className="flex rounded-md shadow-sm overflow-hidden">
+              <button
+                className={`py-2 px-4 flex items-center justify-center ${
+                  viewMode === 'list' 
+                    ? 'bg-blue-600 text-white font-medium' 
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                } transition-colors duration-200`}
+                onClick={() => setViewMode('list')}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
+                </svg>
+                리스트 보기
+              </button>
+              <button
+                className={`py-2 px-4 flex items-center justify-center ${
+                  viewMode === 'calendar' 
+                    ? 'bg-blue-600 text-white font-medium' 
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                } transition-colors duration-200`}
+                onClick={() => setViewMode('calendar')}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                </svg>
+                달력 보기
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        {/* 달력 뷰 */}
+        {viewMode === 'calendar' && (
+          <div className="p-2">
+            <LeaveCalendar 
+              highlightDates={selectedDates}
+              leaveRequests={existingLeaves}
+              year={getClosestLeaveDate()?.getFullYear()}
+              month={getClosestLeaveDate()?.getMonth()}
+            />
+          </div>
+        )}
+        
+        {/* 리스트 뷰 */}
+        {viewMode === 'list' && (
+          <div>
+            {existingLeaves.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200 table-auto">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">신청일</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">기간</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">종류</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">사유</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap h-12 align-middle text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {existingLeaves.map((leave) => (
+                      <tr key={leave.id}>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {new Date(leave.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {formatDate(leave.start_date)}
+                          {leave.leave_source === 'half_day' ? ' (반차)' : ` ~ ${formatDate(leave.end_date)}`}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm text-gray-500">
+                          {leave.leave_type === 'annual' ? '일반 연차' : '특별 연차'}
+                        </td>
+                        <td className="px-3 py-3 text-center text-sm text-gray-500 max-w-[150px] truncate">
+                          {leave.reason}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
+                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            leave.status === 'approved' 
+                              ? 'bg-green-100 text-green-800' 
+                              : leave.status === 'rejected' 
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {leave.status === 'approved' 
+                              ? '승인됨' 
+                              : leave.status === 'rejected' 
+                                ? '반려됨'
+                                : '승인 대기'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap text-sm">
+                          {leave.status === 'pending' && (
+                            <div className="flex items-center justify-center gap-2">
                               <button
-                                onClick={() => withdrawLeaveRequest(leave.id)}
-                                className="text-red-600 hover:text-red-900 mr-2"
+                                onClick={() => openEditModal(leave)}
+                                className="text-blue-600 hover:text-blue-900 font-medium"
                                 disabled={processingId === leave.id}
                               >
-                                {processingId === leave.id ? '처리 중...' : '확인'}
+                                수정
                               </button>
-                              <button
-                                onClick={() => setWithdrawConfirmId(null)}
-                                className="text-gray-600 hover:text-gray-900"
-                              >
-                                취소
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              onClick={() => setWithdrawConfirmId(leave.id)}
-                              className="text-red-600 hover:text-red-900"
-                              disabled={processingId === leave.id}
-                            >
-                              철회
-                            </button>
+                              
+                              {withdrawConfirmId === leave.id ? (
+                                <>
+                                  <button
+                                    onClick={() => withdrawLeaveRequest(leave.id)}
+                                    className="text-red-600 hover:text-red-900 font-medium"
+                                    disabled={processingId === leave.id}
+                                  >
+                                    {processingId === leave.id ? '처리 중...' : '확인'}
+                                  </button>
+                                  <button
+                                    onClick={() => setWithdrawConfirmId(null)}
+                                    className="text-gray-600 hover:text-gray-900 font-medium"
+                                  >
+                                    취소
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => setWithdrawConfirmId(leave.id)}
+                                  className="text-red-600 hover:text-red-900 font-medium"
+                                  disabled={processingId === leave.id}
+                                >
+                                  철회
+                                </button>
+                              )}
+                            </div>
                           )}
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-gray-500 p-4 text-center">연차 신청 내역이 없습니다.</p>
+            )}
           </div>
-        ) : (
-          <p className="text-gray-500">연차 신청 내역이 없습니다.</p>
         )}
       </div>
       
@@ -736,43 +893,111 @@ const LeaveRequest = () => {
                 )}
                 
                 <div>
-                  <label htmlFor="editHalfDay" className="flex items-center text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">반차 신청</label>
+                  <button
+                    type="button"
+                    className={`w-full flex items-center justify-between p-3 rounded-md border ${
+                      isHalfDay 
+                        ? 'bg-blue-50 border-blue-500 text-blue-700' 
+                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                    }`}
+                    onClick={() => setIsHalfDay(!isHalfDay)}
+                  >
+                    <div className="flex items-center">
+                      <div className={`w-5 h-5 mr-3 rounded flex items-center justify-center ${
+                        isHalfDay ? 'bg-blue-500' : 'border border-gray-400 bg-white'
+                      }`}>
+                        {isHalfDay && (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </div>
+                      반차로 신청하기
+                    </div>
+                    <div className={`w-10 h-6 flex items-center rounded-full transition-all duration-300 ${
+                      isHalfDay ? 'bg-blue-400' : 'bg-gray-300'
+                    }`}>
+                      <div className={`bg-white w-5 h-5 rounded-full shadow-md transform transition-transform duration-300 ${
+                        isHalfDay ? 'translate-x-5' : 'translate-x-0.5'
+                      }`}></div>
+                    </div>
+                  </button>
+                  
+                  {/* 히든 체크박스 (폼 제출용) */}
+                  <div className="hidden">
                     <input
                       id="editHalfDay"
                       type="checkbox"
-                      className="mr-2"
                       checked={isHalfDay}
-                      onChange={(e) => setIsHalfDay(e.target.checked)}
+                      onChange={() => {}}
                     />
-                    반차 신청
-                  </label>
+                  </div>
                   
                   {isHalfDay && (
                     <div className="mt-2">
-                      <label className="text-sm font-medium text-gray-700 mb-1">반차 구분</label>
-                      <div className="flex gap-4">
-                        <label className="flex items-center">
-                          <input
-                            type="radio"
-                            className="mr-2"
-                            name="editHalfDayPeriod"
-                            value="morning"
-                            checked={halfDayPeriod === 'morning'}
-                            onChange={() => setHalfDayPeriod('morning')}
-                          />
-                          오전
-                        </label>
-                        <label className="flex items-center">
-                          <input
-                            type="radio"
-                            className="mr-2"
-                            name="editHalfDayPeriod"
-                            value="afternoon"
-                            checked={halfDayPeriod === 'afternoon'}
-                            onChange={() => setHalfDayPeriod('afternoon')}
-                          />
-                          오후
-                        </label>
+                      <label className="text-sm font-medium text-gray-700 mb-2 block">반차 구분</label>
+                      <div className="flex gap-3">
+                        <button
+                          type="button"
+                          className={`flex-1 py-3 px-4 rounded-md border ${
+                            halfDayPeriod === 'morning' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium shadow-sm' 
+                              : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                          onClick={() => setHalfDayPeriod('morning')}
+                        >
+                          <div className="flex items-center justify-center">
+                            <svg 
+                              xmlns="http://www.w3.org/2000/svg" 
+                              className={`h-5 w-5 mr-2 ${halfDayPeriod === 'morning' ? 'text-blue-500' : 'text-gray-400'}`} 
+                              viewBox="0 0 20 20" 
+                              fill="currentColor"
+                            >
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                            </svg>
+                            오전
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          className={`flex-1 py-3 px-4 rounded-md border ${
+                            halfDayPeriod === 'afternoon' 
+                              ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium shadow-sm' 
+                              : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                          onClick={() => setHalfDayPeriod('afternoon')}
+                        >
+                          <div className="flex items-center justify-center">
+                            <svg 
+                              xmlns="http://www.w3.org/2000/svg" 
+                              className={`h-5 w-5 mr-2 ${halfDayPeriod === 'afternoon' ? 'text-blue-500' : 'text-gray-400'}`} 
+                              viewBox="0 0 20 20" 
+                              fill="currentColor"
+                            >
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                            </svg>
+                            오후
+                          </div>
+                        </button>
+                      </div>
+                      
+                      {/* 히든 라디오 버튼 (폼 제출용) */}
+                      <div className="hidden">
+                        <input
+                          type="radio"
+                          name="editHalfDayPeriod"
+                          value="morning"
+                          checked={halfDayPeriod === 'morning'}
+                          onChange={() => {}}
+                        />
+                        <input
+                          type="radio"
+                          name="editHalfDayPeriod"
+                          value="afternoon"
+                          checked={halfDayPeriod === 'afternoon'}
+                          onChange={() => {}}
+                        />
                       </div>
                     </div>
                   )}
@@ -780,26 +1005,40 @@ const LeaveRequest = () => {
                 
                 <div>
                   <label htmlFor="editStartDate" className="block text-sm font-medium text-gray-700 mb-1">시작일</label>
-                  <input
-                    id="editStartDate"
-                    type="date"
-                    className="w-full p-2 border border-gray-300 rounded-md"
-                    value={startDate ? startDate.toISOString().split('T')[0] : ''}
-                    onChange={(e) => setStartDate(e.target.value ? new Date(e.target.value) : null)}
-                  />
+                  <div className="relative">
+                    <input
+                      id="editStartDate"
+                      type="date"
+                      className="w-full p-3 sm:p-2 border border-gray-300 rounded-md text-base appearance-none h-12 sm:h-auto"
+                      value={startDate ? startDate.toISOString().split('T')[0] : ''}
+                      onChange={(e) => setStartDate(e.target.value ? new Date(e.target.value) : null)}
+                    />
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  </div>
                 </div>
                 
                 {!isHalfDay && (
                   <div>
                     <label htmlFor="editEndDate" className="block text-sm font-medium text-gray-700 mb-1">종료일</label>
-                    <input
-                      id="editEndDate"
-                      type="date"
-                      className="w-full p-2 border border-gray-300 rounded-md"
-                      value={endDate ? endDate.toISOString().split('T')[0] : ''}
-                      onChange={(e) => setEndDate(e.target.value ? new Date(e.target.value) : null)}
-                      min={startDate ? startDate.toISOString().split('T')[0] : ''}
-                    />
+                    <div className="relative">
+                      <input
+                        id="editEndDate"
+                        type="date"
+                        className="w-full p-3 sm:p-2 border border-gray-300 rounded-md text-base appearance-none h-12 sm:h-auto"
+                        value={endDate ? endDate.toISOString().split('T')[0] : ''}
+                        onChange={(e) => setEndDate(e.target.value ? new Date(e.target.value) : null)}
+                        min={startDate ? startDate.toISOString().split('T')[0] : ''}
+                      />
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                    </div>
                   </div>
                 )}
                 
