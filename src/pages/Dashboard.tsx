@@ -1873,6 +1873,25 @@ export const Dashboard = () => {
               </p>
             </div>
           </div>
+          
+          {/* 연차 버튼 섹션 */}
+          <div className="flex space-x-2 mt-2 sm:mt-0">
+            <button 
+              onClick={() => navigate('/leave-request')}
+              className="px-3 py-2 text-sm font-medium bg-green-100 text-green-700 rounded-lg hover:bg-green-200 whitespace-nowrap"
+            >
+              연차 신청
+            </button>
+            
+            {profile && profile.role === 'admin' && (
+              <button 
+                onClick={() => navigate('/leave-management')}
+                className="px-3 py-2 text-sm font-medium bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 whitespace-nowrap"
+              >
+                연차 관리
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

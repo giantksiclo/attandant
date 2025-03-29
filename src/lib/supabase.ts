@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // 환경 변수에서 Supabase 설정 가져오기
 const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string;
@@ -11,12 +11,52 @@ const PROFILES_TABLE = 'profiles_new';
 console.log('Supabase 초기화 - URL:', supabaseUrl);
 console.log('Supabase 초기화 - KEY:', supabaseAnonKey ? '설정됨' : '설정안됨');
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+interface CustomSupabaseClient extends SupabaseClient {
+  setProject: (projectId: string) => SupabaseClient;
+}
+
+// Supabase 클라이언트 생성
+const supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true
   }
 });
+
+// 외부 프로젝트에 연결하는 메서드 추가
+const customSupabase = supabaseClient as CustomSupabaseClient;
+
+// 프로젝트 ID별 클라이언트 인스턴스 캐싱을 위한 객체
+const projectClients: Record<string, SupabaseClient> = {};
+
+customSupabase.setProject = function(projectId: string): SupabaseClient {
+  // 이미 생성된 클라이언트가 있으면 재사용
+  if (projectClients[projectId]) {
+    return projectClients[projectId];
+  }
+  
+  // 프로젝트 ID가 지정된 경우 해당 프로젝트에 연결
+  if (projectId === 'qebiqdtvyvnzizddmczj') {
+    const employUrl = 'https://qebiqdtvyvnzizddmczj.supabase.co';
+    const employServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFlYmlxZHR2eXZueml6ZGRtY3pqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjczNTE3OCwiZXhwIjoyMDU4MzExMTc4fQ.zc7_7oCJNux9GBfRT4o8qXLl83gZigi9yT4NWpY49uc';
+    
+    const projectClient = createClient(employUrl, employServiceKey, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true
+      }
+    });
+    
+    // 생성된 클라이언트 캐싱
+    projectClients[projectId] = projectClient;
+    return projectClient;
+  }
+  
+  // 기본적으로 현재 클라이언트 반환
+  return this;
+};
+
+export const supabase = customSupabase;
 
 // 현재 인증된 사용자의 상세 정보를 콘솔에 출력
 supabase.auth.onAuthStateChange((event, session) => {
