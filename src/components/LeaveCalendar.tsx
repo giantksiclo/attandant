@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 
 interface LeaveRequest {
   id: string;
@@ -30,6 +30,12 @@ export const LeaveCalendar: React.FC<LeaveCalendarProps> = ({
   const [currentYear, setCurrentYear] = useState<number>(initialYear || now.getFullYear());
   const [currentMonth, setCurrentMonth] = useState<number>(initialMonth || now.getMonth());
 
+  // props가 변경될 때 상태 업데이트
+  useEffect(() => {
+    if (initialYear !== undefined) setCurrentYear(initialYear);
+    if (initialMonth !== undefined) setCurrentMonth(initialMonth);
+  }, [initialYear, initialMonth]);
+
   // 요일 및 월 이름
   const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
   const monthNames = [
@@ -59,6 +65,8 @@ export const LeaveCalendar: React.FC<LeaveCalendarProps> = ({
 
   // 달력 데이터 생성
   const calendarData = useMemo(() => {
+    console.log(`달력 데이터 생성: ${currentYear}년 ${currentMonth + 1}월, 연차 요청 ${leaveRequests.length}개`);
+    
     // 해당 월의 첫날
     const firstDayOfMonth = new Date(currentYear, currentMonth, 1);
     // 해당 월의 마지막 날짜
@@ -73,25 +81,47 @@ export const LeaveCalendar: React.FC<LeaveCalendarProps> = ({
     const leavesByDate: Record<string, LeaveRequest[]> = {};
     
     leaveRequests.forEach(leave => {
-      const startDate = new Date(leave.start_date);
-      const endDate = new Date(leave.end_date);
+      console.log(`처리 중인 연차 요청:`, leave.id, leave.start_date, leave.end_date, leave.leave_source);
       
-      // 현재 표시중인 월에 해당하는 연차만 필터링
-      let currentDate = new Date(startDate);
-      
-      while (currentDate <= endDate) {
-        if (currentDate.getMonth() === currentMonth && currentDate.getFullYear() === currentYear) {
-          const dateKey = currentDate.getDate().toString();
-          
+      // half_day 타입인 경우 start_date만 사용
+      if (leave.leave_source === 'half_day') {
+        const leaveDate = new Date(leave.start_date);
+        if (leaveDate.getMonth() === currentMonth && leaveDate.getFullYear() === currentYear) {
+          const dateKey = leaveDate.getDate().toString();
           if (!leavesByDate[dateKey]) {
             leavesByDate[dateKey] = [];
           }
-          
           leavesByDate[dateKey].push(leave);
+          console.log(`반차 추가됨: ${dateKey}일`);
         }
+      } else {
+        // 일반 연차인 경우 start_date부터 end_date까지 모든 날짜에 표시
+        const startDate = new Date(leave.start_date);
+        const endDate = new Date(leave.end_date);
         
-        currentDate.setDate(currentDate.getDate() + 1);
+        // 현재 표시중인 월에 해당하는 연차만 필터링
+        let currentDate = new Date(startDate);
+        
+        while (currentDate <= endDate) {
+          if (currentDate.getMonth() === currentMonth && currentDate.getFullYear() === currentYear) {
+            const dateKey = currentDate.getDate().toString();
+            
+            if (!leavesByDate[dateKey]) {
+              leavesByDate[dateKey] = [];
+            }
+            
+            leavesByDate[dateKey].push(leave);
+            console.log(`연차 추가됨: ${dateKey}일`);
+          }
+          
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
       }
+    });
+
+    // 날짜별 연차 요약 출력
+    Object.keys(leavesByDate).forEach(date => {
+      console.log(`${date}일에 연차 ${leavesByDate[date].length}개 존재`);
     });
 
     // 달력에 표시할 날짜 배열 (6주 x 7일)
@@ -170,20 +200,24 @@ export const LeaveCalendar: React.FC<LeaveCalendarProps> = ({
       <div className="flex justify-between items-center mb-2">
         <button 
           onClick={goToPrevMonth}
-          className="p-1 text-gray-600 hover:text-gray-900 text-lg"
+          className="p-2 rounded-full hover:bg-gray-100 text-gray-600 hover:text-gray-900 text-lg flex items-center justify-center"
           aria-label="이전 달"
         >
-          &lsaquo;
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
         </button>
         <h3 className="text-sm sm:text-base font-bold">
           {currentYear}년 {monthNames[currentMonth]}
         </h3>
         <button 
           onClick={goToNextMonth}
-          className="p-1 text-gray-600 hover:text-gray-900 text-lg"
+          className="p-2 rounded-full hover:bg-gray-100 text-gray-600 hover:text-gray-900 text-lg flex items-center justify-center"
           aria-label="다음 달"
         >
-          &rsaquo;
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+          </svg>
         </button>
       </div>
       
@@ -236,9 +270,9 @@ export const LeaveCalendar: React.FC<LeaveCalendarProps> = ({
                         <div 
                           key={`${leave.id}-${idx}`}
                           className={`text-[7px] sm:text-[8px] px-1 py-0.5 rounded-sm ${getStatusColorClass(leave.status)}`}
-                          title={`${leave.reason} (${leave.leave_type === 'annual' ? '일반 연차' : '특별 연차'})`}
+                          title={`${leave.userName || ''}${leave.userName ? ' - ' : ''}${leave.reason} (${leave.leave_type === 'annual' ? '일반 연차' : '특별 연차'})`}
                         >
-                          {leave.leave_source === 'half_day' ? '반차' : '연차'}
+                          {leave.userName ? leave.userName.split(' ')[0] : ''} {leave.leave_source === 'half_day' ? '반차' : '연차'}
                         </div>
                       ))}
                       

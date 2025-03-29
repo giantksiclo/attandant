@@ -60,8 +60,10 @@ const LeaveManagement = () => {
   const [calendarView, setCalendarView] = useState<boolean>(false);
   const [employees, setEmployees] = useState<EmployeeInfo[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
-  const [months, setMonths] = useState<{ year: number; month: number }[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null);
+  const [currentCalendarMonth, setCurrentCalendarMonth] = useState<{ year: number; month: number }>({
+    year: new Date().getFullYear(),
+    month: new Date().getMonth()
+  });
   const [departments, setDepartments] = useState<string[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
 
@@ -230,6 +232,32 @@ const LeaveManagement = () => {
           } else {
             console.log(`사용자 프로필 ${profilesData?.length || 0}개 조회 성공`);
             profiles = profilesData || [];
+            
+            // 주의: 관리자 권한이 필요한 API 접근 제거
+            // 대신 프로필에 이메일 필드가 있으면 사용하고, 아니면 빈 문자열로 설정
+            console.log('프로필 정보에서 이메일 필드 확인');
+            
+            // 각 프로필에 이메일 필드가 없으면 대체 필드 검사
+            profiles = profiles.map(profile => {
+              // 이메일 필드가 있으면 그대로 사용
+              if (profile.email) {
+                return profile;
+              }
+              
+              // 이메일 필드가 없지만 user_email 필드가 있는 경우
+              if (profile.user_email) {
+                return {
+                  ...profile,
+                  email: profile.user_email
+                };
+              }
+              
+              // 회원 ID에서 이름을 추출해서 임시 이메일 생성 (필요시)
+              return {
+                ...profile,
+                email: ''
+              };
+            });
           }
         } catch (profileFetchError) {
           console.error('프로필 정보 조회 중 예외 발생:', profileFetchError);
@@ -260,26 +288,17 @@ const LeaveManagement = () => {
           id: profile.id,
           name: profile.name || '알 수 없음',
           department: profile.department || '알 수 없음',
-          email: profile.email || '',
+          email: profile.email || '', // 이제 이 필드가 DB에 저장되어 있음
         }));
         
         console.log('기본 직원 정보 생성:', employeeList.length);
         setEmployees(employeeList);
         
-        // 달력 표시용 월 정보 생성
+        // 현재 날짜로 달력 초기화
         const today = new Date();
-        const monthsList = [];
-        for (let i = -1; i <= 6; i++) {
-          const date = new Date(today.getFullYear(), today.getMonth() + i, 1);
-          monthsList.push({
-            year: date.getFullYear(),
-            month: date.getMonth() + 1
-          });
-        }
-        setMonths(monthsList);
-        setSelectedMonth({
+        setCurrentCalendarMonth({
           year: today.getFullYear(),
-          month: today.getMonth() + 1
+          month: today.getMonth()
         });
         
       } catch (error) {
@@ -312,37 +331,10 @@ const LeaveManagement = () => {
         return;
       }
 
+      // 이메일 정보 체크 (DB에 저장된 이메일 사용)
       if (!selectedEmployee.email) {
-        // 이메일 정보가 없는 경우 auth API를 통해 조회
-        console.log(`직원 ${employeeId} 이메일 조회 시도`);
-        
-        try {
-          // 특정 사용자 정보 조회
-          const { data: userData, error: userError } = await supabase.auth.admin.getUserById(employeeId);
-          
-          if (!userError && userData && userData.user && userData.user.email) {
-            console.log(`직원 ${employeeId} 이메일 조회 성공: ${userData.user.email}`);
-            selectedEmployee.email = userData.user.email;
-          } else {
-            console.error(`직원 ${employeeId} 이메일 조회 실패:`, userError);
-            
-            // 일반 Auth API를 통한 조회 시도 (현재 사용자인 경우)
-            if (currentUser && currentUser.id === employeeId && currentUser.email) {
-              selectedEmployee.email = currentUser.email;
-              console.log(`현재 사용자 이메일 사용: ${currentUser.email}`);
-            } else {
-              console.log(`직원 ${employeeId} 이메일 정보 없음`);
-              return;
-            }
-          }
-        } catch (err) {
-          console.error(`직원 ${employeeId} 이메일 조회 중 예외 발생:`, err);
-          return;
-        }
-      }
-
-      if (!selectedEmployee.email) {
-        console.log(`직원 ${employeeId} 이메일 정보 없어 연차 정보 조회 불가`);
+        console.log(`직원 ${employeeId}의 이메일 정보가 없습니다`);
+        toast.warning(`${selectedEmployee.name} 직원의 이메일 정보가 없어 연차 정보를 조회할 수 없습니다`);
         return;
       }
 
@@ -350,34 +342,156 @@ const LeaveManagement = () => {
       const employSupabase = supabase.setProject('qebiqdtvyvnzizddmczj');
       console.log(`직원 ${selectedEmployee.name} 이메일(${selectedEmployee.email})로 외부 시스템 ID 조회`);
       
-      const { data: employeeData, error: employeeError } = await employSupabase
+      // 이메일 주소 정규화: 앞뒤 공백 제거하고 소문자로 변환
+      const normalizedEmail = selectedEmployee.email.trim().toLowerCase();
+      
+      // 먼저 외부 시스템의 모든 직원 정보를 가져와서 클라이언트 측에서 이메일 매칭
+      const { data: allEmployees, error: empListError } = await employSupabase
         .from('employees')
-        .select('id')
-        .eq('email', selectedEmployee.email)
-        .single();
+        .select('id, email, name')
+        .order('id', { ascending: true });
         
-      if (employeeError || !employeeData) {
-        console.error(`외부 시스템에서 직원 ${selectedEmployee.email} 정보 없음:`, employeeError);
+      if (empListError) {
+        console.error('외부 시스템 직원 목록 조회 실패:', empListError);
+        toast.warning(`외부 시스템 연결에 문제가 있습니다`);
         return;
       }
       
-      const employeeExternalId = employeeData.id;
-      console.log(`외부 시스템에서 직원 ID 조회 성공: ${employeeExternalId}`);
+      console.log(`외부 시스템에서 총 ${allEmployees?.length || 0}명의 직원 정보 조회됨`);
       
-      // 일반 연차 정보 가져오기
-      const currentYear = new Date().getFullYear();
-      console.log(`${currentYear}년 연차 정보 조회 시도`);
+      // 디버깅: 모든 이메일 출력
+      console.log(`### 디버깅: 찾으려는 이메일 "${normalizedEmail}" ###`);
       
-      const { data: annualLeave, error: annualError } = await employSupabase
+      // 모든 이메일 정규화하여 출력 (디버깅용)
+      console.log('외부 시스템의 모든 이메일 (정규화):');
+      allEmployees?.forEach(emp => {
+        if (emp.email) {
+          const empNormalizedEmail = emp.email.trim().toLowerCase();
+          console.log(`- ${emp.name}: "${empNormalizedEmail}" (원본: "${emp.email}")`);
+          
+          // 유사도 체크 (첫 부분 일치 여부)
+          const emailUsername = normalizedEmail.split('@')[0];
+          const empEmailUsername = empNormalizedEmail.split('@')[0];
+          
+          if (emailUsername && empEmailUsername && 
+              (emailUsername.includes(empEmailUsername) || empEmailUsername.includes(emailUsername))) {
+            console.log(`  > 유사한 이메일 발견! ${emailUsername} vs ${empEmailUsername}`);
+          }
+          
+          // 정확히 일치하는지 확인
+          if (normalizedEmail === empNormalizedEmail) {
+            console.log(`  > 정확히 일치하는 이메일 발견!`);
+          }
+        }
+      });
+      
+      // 대소문자 구분 없이 매칭
+      const matchedEmployee = allEmployees?.find(emp => 
+        emp.email && emp.email.trim().toLowerCase() === normalizedEmail
+      );
+      
+      // 정확한 매칭이 안 되면 부분 매칭 시도 (이메일 아이디 부분만 비교)
+      if (!matchedEmployee) {
+        console.error(`외부 시스템에서 ${selectedEmployee.name}(${normalizedEmail}) 직원 정보 매칭 실패`);
+        
+        // 유사한 이메일 기준으로 매칭 시도
+        const emailUsername = normalizedEmail.split('@')[0];
+        const similarEmails = allEmployees
+          ?.filter(emp => emp.email && emp.email.toLowerCase().includes(emailUsername.toLowerCase()))
+          .map(emp => `${emp.name}: ${emp.email}`);
+          
+        if (similarEmails && similarEmails.length > 0) {
+          console.log(`유사한 이메일을 가진 직원들: ${similarEmails.join(', ')}`);
+          
+          // 첫 번째 유사한 이메일을 가진 직원으로 시도
+          const similarEmployee = allEmployees?.find(emp => 
+            emp.email && emp.email.toLowerCase().includes(emailUsername.toLowerCase())
+          );
+          
+          if (similarEmployee) {
+            console.log(`유사한 이메일로 매칭 시도: ${similarEmployee.name} (${similarEmployee.email})`);
+            
+            // 유사한 이메일로 진행
+            const employeeExternalId = similarEmployee.id;
+            
+            // 일반 연차 정보 가져오기 - 연도 필터 제거하고 가장 최근 연차 정보 가져오기
+            console.log(`가장 최근 연차 정보 조회 시도 (유사 매칭)`);
+            
+            const { data: annualLeaves, error: annualError } = await employSupabase
+              .from('annual_leaves')
+              .select('*')
+              .eq('employee_id', employeeExternalId)
+              .order('year', { ascending: false }); // 연도 내림차순 정렬하여 최신 데이터부터 가져오기
+              
+            if (!annualError && annualLeaves && annualLeaves.length > 0) {
+              // 첫 번째 결과가 가장 최근 연도의 데이터
+              const annualLeave = annualLeaves[0];
+              
+              console.log(`연차 정보 조회 성공 (${annualLeave.year}년): 총 ${annualLeave.total_days}일, 사용 ${annualLeave.used_days}일, 잔여 ${annualLeave.remaining_days}일`);
+              
+              // 직원 상태 업데이트를 위한 복사본 생성
+              const updatedEmployees = [...employees];
+              const employeeToUpdate = updatedEmployees.find(emp => emp.id === employeeId);
+              
+              if (employeeToUpdate) {
+                employeeToUpdate.annualLeave = {
+                  total: annualLeave.total_days,
+                  used: annualLeave.used_days,
+                  remaining: annualLeave.remaining_days
+                };
+                
+                // 특별 연차 정보 가져오기
+                console.log(`특별 연차 정보 조회 시도`);
+                const { data: specialLeaves, error: specialError } = await employSupabase
+                  .from('special_leaves')
+                  .select('*')
+                  .eq('employee_id', employeeExternalId)
+                  .lt('expires_at', new Date().toISOString())
+                  .gt('remaining_days', 0);
+                  
+                if (specialError) {
+                  console.error(`특별 연차 정보 조회 실패:`, specialError);
+                } else if (specialLeaves && specialLeaves.length > 0) {
+                  employeeToUpdate.specialLeaves = specialLeaves;
+                  console.log(`특별 연차 정보 조회 성공: ${specialLeaves.length}개`);
+                }
+                
+                // 업데이트된 직원 정보 저장
+                setEmployees(updatedEmployees);
+                
+                // 결과 표시
+                toast.success(`${selectedEmployee.name} 직원의 연차 정보를 찾았습니다 (유사 이메일로 매칭)`);
+                return;
+              }
+            }
+          }
+        }
+        
+        // 유사 매칭도 실패한 경우
+        toast.warning(`외부 시스템에 ${selectedEmployee.name} 직원의 연차 정보가 없습니다`);
+        return;
+      }
+      
+      const employeeExternalId = matchedEmployee.id;
+      console.log(`외부 시스템에서 직원 ID 조회 성공: ${employeeExternalId} (${matchedEmployee.email})`);
+      
+      // 일반 연차 정보 가져오기 - 연도 필터 제거하고 가장 최근 연차 정보 가져오기
+      console.log(`가장 최근 연차 정보 조회 시도`);
+      
+      const { data: annualLeaves, error: annualError } = await employSupabase
         .from('annual_leaves')
         .select('*')
         .eq('employee_id', employeeExternalId)
-        .eq('year', currentYear)
-        .single();
+        .order('year', { ascending: false }); // 연도 내림차순 정렬하여 최신 데이터부터 가져오기
         
       if (annualError) {
         console.error(`연차 정보 조회 실패:`, annualError);
-      } else if (annualLeave) {
+      } else if (annualLeaves && annualLeaves.length > 0) {
+        // 첫 번째 결과가 가장 최근 연도의 데이터
+        const annualLeave = annualLeaves[0];
+        
+        console.log(`연차 정보 조회 성공 (${annualLeave.year}년): 총 ${annualLeave.total_days}일, 사용 ${annualLeave.used_days}일, 잔여 ${annualLeave.remaining_days}일`);
+        
         // 직원 상태 업데이트를 위한 복사본 생성
         const updatedEmployees = [...employees];
         const employeeToUpdate = updatedEmployees.find(emp => emp.id === employeeId);
@@ -388,8 +502,6 @@ const LeaveManagement = () => {
             used: annualLeave.used_days,
             remaining: annualLeave.remaining_days
           };
-          
-          console.log(`연차 정보 조회 성공: 총 ${annualLeave.total_days}일, 사용 ${annualLeave.used_days}일, 잔여 ${annualLeave.remaining_days}일`);
           
           // 특별 연차 정보 가져오기
           console.log(`특별 연차 정보 조회 시도`);
@@ -494,43 +606,19 @@ const LeaveManagement = () => {
     try {
       const employSupabase = supabase.setProject('qebiqdtvyvnzizddmczj');
       
-      // 사용자 이메일 가져오기 - 조회 방식 개선
+      // 사용자 이메일 가져오기 - 직원 목록에서 가져옴
       let userEmail = '';
       
-      // 1. 현재 사용자와 동일한 경우 현재 사용자 이메일 사용 (가장 빠르고 안정적인 방법)
-      if (currentUser && currentUser.id === leaveRequest.user_id && currentUser.email) {
-        userEmail = currentUser.email;
+      // 1. 직원 목록에서 이메일 정보 가져오기
+      const requestUser = employees.find(emp => emp.id === leaveRequest.user_id);
+      if (requestUser && requestUser.email) {
+        userEmail = requestUser.email.trim();
+        console.log('Using employee email from database:', userEmail);
+      }
+      // 2. 현재 사용자와 동일한 경우 현재 사용자 이메일 사용
+      else if (currentUser && currentUser.id === leaveRequest.user_id && currentUser.email) {
+        userEmail = currentUser.email.trim();
         console.log('Using current user email:', userEmail);
-      }
-      
-      // 2. Auth API를 통해 사용자 정보 조회 (이메일 없는 경우에만)
-      if (!userEmail) {
-        try {
-          // 특정 사용자 정보 조회
-          const { data: userData, error: userError } = await supabase.auth.admin.getUserById(leaveRequest.user_id);
-          
-          if (!userError && userData && userData.user && userData.user.email) {
-            userEmail = userData.user.email;
-            console.log('Found email from auth API:', userEmail);
-          } else {
-            console.error('Auth API에서 사용자 조회 오류:', userError);
-          }
-        } catch (authError) {
-          console.error('Auth API 호출 중 오류 발생:', authError);
-        }
-      }
-      
-      // 3. 일반 Auth API를 통해 현재 사용자 정보 조회 (다른 방법 실패 시)
-      if (!userEmail) {
-        try {
-          const { data } = await supabase.auth.getUser();
-          if (data && data.user && data.user.email) {
-            userEmail = data.user.email;
-            console.log('Using current auth user email:', userEmail);
-          }
-        } catch (authError) {
-          console.error('일반 Auth API 호출 중 오류:', authError);
-        }
       }
       
       // 이메일을 찾지 못한 경우
@@ -538,18 +626,41 @@ const LeaveManagement = () => {
         throw new Error('사용자 이메일을 찾을 수 없습니다');
       }
       
-      // 외부 시스템에서 직원 ID 찾기
-      const { data: employeeData, error: employeeError } = await employSupabase
+      // 이메일 정규화: 소문자로 변환
+      const normalizedEmail = userEmail.toLowerCase();
+      
+      // 먼저 외부 시스템의 모든 직원 정보를 가져와서 클라이언트 측에서 이메일 매칭
+      const { data: allEmployees, error: empListError } = await employSupabase
         .from('employees')
-        .select('id')
-        .eq('email', userEmail)
-        .single();
+        .select('id, email')
+        .order('id', { ascending: true });
         
-      if (employeeError || !employeeData) {
+      if (empListError || !allEmployees) {
+        throw new Error('외부 시스템 직원 목록 조회 실패');
+      }
+      
+      // 대소문자 구분 없이 매칭
+      const matchedEmployee = allEmployees.find(emp => 
+        emp.email && emp.email.trim().toLowerCase() === normalizedEmail
+      );
+      
+      if (!matchedEmployee) {
+        console.error(`외부 시스템에서 이메일 ${normalizedEmail}와 일치하는 직원을 찾을 수 없습니다`);
+        
+        // 유사한 이메일 출력 (디버깅 목적)
+        const similarEmails = allEmployees
+          .filter(emp => emp.email && emp.email.toLowerCase().includes(normalizedEmail.split('@')[0].toLowerCase()))
+          .map(emp => emp.email);
+          
+        if (similarEmails.length > 0) {
+          console.log(`유사한 이메일을 가진 직원들: ${similarEmails.join(', ')}`);
+        }
+        
         throw new Error('외부 시스템에서 직원 정보를 찾을 수 없습니다');
       }
       
-      const employeeId = employeeData.id;
+      const employeeId = matchedEmployee.id;
+      console.log(`외부 시스템에서 직원 ID 조회 성공: ${employeeId}`);
       
       // 일반 연차인 경우
       if (leaveRequest.leave_type === 'annual') {
@@ -668,6 +779,27 @@ const LeaveManagement = () => {
     }
   };
 
+  // 달력 월 이동 함수
+  const moveToPrevMonth = () => {
+    setCurrentCalendarMonth(prev => {
+      if (prev.month === 0) {
+        return { year: prev.year - 1, month: 11 };
+      } else {
+        return { year: prev.year, month: prev.month - 1 };
+      }
+    });
+  };
+
+  const moveToNextMonth = () => {
+    setCurrentCalendarMonth(prev => {
+      if (prev.month === 11) {
+        return { year: prev.year + 1, month: 0 };
+      } else {
+        return { year: prev.year, month: prev.month + 1 };
+      }
+    });
+  };
+
   return (
     <div className="container mx-auto p-4">
       <div className="flex justify-between items-center mb-6">
@@ -759,29 +891,35 @@ const LeaveManagement = () => {
         <div className="bg-white p-4 rounded-md shadow-sm mb-6">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-lg font-semibold">연차 달력</h2>
-            <div className="flex space-x-2 overflow-x-auto">
-              {months.map(m => (
-                <button
-                  key={`${m.year}-${m.month}`}
-                  className={`px-3 py-1 rounded text-sm ${
-                    selectedMonth && selectedMonth.year === m.year && selectedMonth.month === m.month
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-200'
-                  }`}
-                  onClick={() => setSelectedMonth(m)}
-                >
-                  {m.year}.{m.month}
-                </button>
-              ))}
+            <div className="flex items-center space-x-2">
+              <button 
+                className="p-2 rounded-full hover:bg-gray-100 text-gray-600"
+                onClick={moveToPrevMonth}
+                aria-label="이전 달"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              </button>
+              <span className="text-sm font-medium">
+                {currentCalendarMonth.year}년 {currentCalendarMonth.month + 1}월
+              </span>
+              <button 
+                className="p-2 rounded-full hover:bg-gray-100 text-gray-600"
+                onClick={moveToNextMonth}
+                aria-label="다음 달"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                </svg>
+              </button>
             </div>
           </div>
-          {selectedMonth && (
-            <LeaveCalendar 
-              leaveRequests={filteredRequests}
-              year={selectedMonth.year}
-              month={selectedMonth.month - 1}
-            />
-          )}
+          <LeaveCalendar 
+            leaveRequests={filteredRequests}
+            year={currentCalendarMonth.year}
+            month={currentCalendarMonth.month}
+          />
         </div>
       )}
       
